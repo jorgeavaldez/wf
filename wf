@@ -7,18 +7,18 @@ show_help() {
     echo "Usage:"
     echo "  $0 add \"task description\" [tag1,tag2,tag3...]"
     echo "  $0 show <task_id>"
-    echo "  $0 list tasks [tag]"
+    echo "  $0 list tasks [--all] [--count N] [tag]"
     echo "  $0 add thread <thread_id> \"summary\" [resolved] [tag1,tag2,tag3...]"
     echo "  $0 show thread <thread_id>"
-    echo "  $0 list threads [tag]"
+    echo "  $0 list threads [--all] [--count N] [tag]"
     echo "  $0 add artifact <file_path> [tag1,tag2,tag3...]"
     echo "  $0 link artifact <artifact_id> thread <thread_id>"
     echo "  $0 summarize artifact <artifact_id>"
     echo "  $0 dump artifact <artifact_id>"
-    echo "  $0 list artifacts [tag]"
+    echo "  $0 list artifacts [--all] [--count N] [tag]"
     echo "  $0 add prompt <file_path> [tag1,tag2,tag3...]"
     echo "  $0 show prompt <prompt_id>"
-    echo "  $0 list prompts [tag]"
+    echo "  $0 list prompts [--all] [--count N] [tag]"
     echo "  $0 update prompt <prompt_id> --name \"new name\" --content \"new content\" --description \"new desc\""
     echo "  $0 delete prompt <prompt_id>"
     echo "  $0 summarize prompt <prompt_id>"
@@ -318,7 +318,45 @@ show_task() {
 }
 
 list_tasks() {
-    TAG_FILTER="$1"
+    # Parse arguments
+    SHOW_ALL=false
+    COUNT=""
+    TAG_FILTER=""
+    
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            "--all")
+                SHOW_ALL=true
+                shift
+                ;;
+            "--count")
+                if [ -z "$2" ] || ! echo "$2" | grep -q '^[0-9][0-9]*$'; then
+                    echo "Error: --count requires a positive integer"
+                    exit 1
+                fi
+                COUNT="$2"
+                shift 2
+                ;;
+            *)
+                # Treat as tag filter if not empty and doesn't start with --
+                if [ -n "$1" ] && [ "${1#--}" = "$1" ]; then
+                    TAG_FILTER="$1"
+                fi
+                shift
+                ;;
+        esac
+    done
+    
+    # Set default limit if neither --all nor --count specified
+    if [ "$SHOW_ALL" = false ] && [ -z "$COUNT" ]; then
+        COUNT="5"
+    fi
+    
+    # Build LIMIT clause
+    LIMIT_CLAUSE=""
+    if [ "$SHOW_ALL" = false ] && [ -n "$COUNT" ]; then
+        LIMIT_CLAUSE="LIMIT $COUNT"
+    fi
     
     if [ -n "$TAG_FILTER" ]; then
         # Get tasks filtered by specific tag
@@ -334,7 +372,8 @@ list_tasks() {
                 WHERE g2.label = '$TAG_FILTER'
             )
             GROUP BY t.id, t.note
-            ORDER BY t.id;
+            ORDER BY t.id DESC
+            $LIMIT_CLAUSE;
         ")
         
         if [ -z "$RESULT" ]; then
@@ -352,7 +391,8 @@ list_tasks() {
             LEFT JOIN task_tags tt ON t.id = tt.task_id
             LEFT JOIN tags g ON tt.tag_id = g.id
             GROUP BY t.id, t.note
-            ORDER BY t.id;
+            ORDER BY t.id DESC
+            $LIMIT_CLAUSE;
         ")
 
         if [ -z "$RESULT" ]; then
@@ -412,7 +452,45 @@ show_thread() {
 }
 
 list_threads() {
-    TAG_FILTER="$1"
+    # Parse arguments
+    SHOW_ALL=false
+    COUNT=""
+    TAG_FILTER=""
+    
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            "--all")
+                SHOW_ALL=true
+                shift
+                ;;
+            "--count")
+                if [ -z "$2" ] || ! echo "$2" | grep -q '^[0-9][0-9]*$'; then
+                    echo "Error: --count requires a positive integer"
+                    exit 1
+                fi
+                COUNT="$2"
+                shift 2
+                ;;
+            *)
+                # Treat as tag filter if not empty and doesn't start with --
+                if [ -n "$1" ] && [ "${1#--}" = "$1" ]; then
+                    TAG_FILTER="$1"
+                fi
+                shift
+                ;;
+        esac
+    done
+    
+    # Set default limit if neither --all nor --count specified
+    if [ "$SHOW_ALL" = false ] && [ -z "$COUNT" ]; then
+        COUNT="5"
+    fi
+    
+    # Build LIMIT clause
+    LIMIT_CLAUSE=""
+    if [ "$SHOW_ALL" = false ] && [ -n "$COUNT" ]; then
+        LIMIT_CLAUSE="LIMIT $COUNT"
+    fi
     
     if [ -n "$TAG_FILTER" ]; then
         # Get threads filtered by specific tag
@@ -428,7 +506,8 @@ list_threads() {
                 WHERE g2.label = '$TAG_FILTER'
             )
             GROUP BY t.thread_id, t.summary, t.resolved
-            ORDER BY t.thread_id;
+            ORDER BY t.thread_id DESC
+            $LIMIT_CLAUSE;
         ")
         
         if [ -z "$RESULT" ]; then
@@ -446,7 +525,8 @@ list_threads() {
             LEFT JOIN thread_tags tt ON t.thread_id = tt.thread_id
             LEFT JOIN tags g ON tt.tag_id = g.id
             GROUP BY t.thread_id, t.summary, t.resolved
-            ORDER BY t.thread_id;
+            ORDER BY t.thread_id DESC
+            $LIMIT_CLAUSE;
         ")
 
         if [ -z "$RESULT" ]; then
@@ -600,7 +680,45 @@ dump_artifact() {
 }
 
 list_artifacts() {
-    TAG_FILTER="$1"
+    # Parse arguments
+    SHOW_ALL=false
+    COUNT=""
+    TAG_FILTER=""
+    
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            "--all")
+                SHOW_ALL=true
+                shift
+                ;;
+            "--count")
+                if [ -z "$2" ] || ! echo "$2" | grep -q '^[0-9][0-9]*$'; then
+                    echo "Error: --count requires a positive integer"
+                    exit 1
+                fi
+                COUNT="$2"
+                shift 2
+                ;;
+            *)
+                # Treat as tag filter if not empty and doesn't start with --
+                if [ -n "$1" ] && [ "${1#--}" = "$1" ]; then
+                    TAG_FILTER="$1"
+                fi
+                shift
+                ;;
+        esac
+    done
+    
+    # Set default limit if neither --all nor --count specified
+    if [ "$SHOW_ALL" = false ] && [ -z "$COUNT" ]; then
+        COUNT="5"
+    fi
+    
+    # Build LIMIT clause
+    LIMIT_CLAUSE=""
+    if [ "$SHOW_ALL" = false ] && [ -n "$COUNT" ]; then
+        LIMIT_CLAUSE="LIMIT $COUNT"
+    fi
     
     if [ -n "$TAG_FILTER" ]; then
         # Get artifacts filtered by specific tag
@@ -616,7 +734,8 @@ list_artifacts() {
                 WHERE g2.label = '$TAG_FILTER'
             )
             GROUP BY a.id, a.filename, a.summary, a.created_at
-            ORDER BY a.created_at DESC;
+            ORDER BY a.created_at DESC
+            $LIMIT_CLAUSE;
         ")
         
         if [ -z "$RESULT" ]; then
@@ -634,7 +753,8 @@ list_artifacts() {
             LEFT JOIN artifact_tags at ON a.id = at.artifact_id
             LEFT JOIN tags g ON at.tag_id = g.id
             GROUP BY a.id, a.filename, a.summary, a.created_at
-            ORDER BY a.created_at DESC;
+            ORDER BY a.created_at DESC
+            $LIMIT_CLAUSE;
         ")
 
         if [ -z "$RESULT" ]; then
@@ -752,7 +872,45 @@ show_prompt() {
 }
 
 list_prompts() {
-    TAG_FILTER="$1"
+    # Parse arguments
+    SHOW_ALL=false
+    COUNT=""
+    TAG_FILTER=""
+    
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            "--all")
+                SHOW_ALL=true
+                shift
+                ;;
+            "--count")
+                if [ -z "$2" ] || ! echo "$2" | grep -q '^[0-9][0-9]*$'; then
+                    echo "Error: --count requires a positive integer"
+                    exit 1
+                fi
+                COUNT="$2"
+                shift 2
+                ;;
+            *)
+                # Treat as tag filter if not empty and doesn't start with --
+                if [ -n "$1" ] && [ "${1#--}" = "$1" ]; then
+                    TAG_FILTER="$1"
+                fi
+                shift
+                ;;
+        esac
+    done
+    
+    # Set default limit if neither --all nor --count specified
+    if [ "$SHOW_ALL" = false ] && [ -z "$COUNT" ]; then
+        COUNT="5"
+    fi
+    
+    # Build LIMIT clause
+    LIMIT_CLAUSE=""
+    if [ "$SHOW_ALL" = false ] && [ -n "$COUNT" ]; then
+        LIMIT_CLAUSE="LIMIT $COUNT"
+    fi
     
     if [ -n "$TAG_FILTER" ]; then
         # Get prompts filtered by specific tag
@@ -768,7 +926,8 @@ list_prompts() {
                 WHERE g2.label = '$TAG_FILTER'
             )
             GROUP BY p.id, p.name, p.description, p.created_at
-            ORDER BY p.created_at DESC;
+            ORDER BY p.created_at DESC
+            $LIMIT_CLAUSE;
         ")
         
         if [ -z "$RESULT" ]; then
@@ -786,7 +945,8 @@ list_prompts() {
             LEFT JOIN prompt_tags pt ON p.id = pt.prompt_id
             LEFT JOIN tags g ON pt.tag_id = g.id
             GROUP BY p.id, p.name, p.description, p.created_at
-            ORDER BY p.created_at DESC;
+            ORDER BY p.created_at DESC
+            $LIMIT_CLAUSE;
         ")
 
         if [ -z "$RESULT" ]; then
