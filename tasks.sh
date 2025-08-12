@@ -1,0 +1,1209 @@
+#!/bin/bash
+
+DB_PATH="${TASKS_DB_PATH:-/plans.db}"
+
+show_help() {
+    echo "Task Manager CLI"
+    echo "Usage:"
+    echo "  $0 add \"task description\" [tag1,tag2,tag3...]"
+    echo "  $0 show <task_id>"
+    echo "  $0 list-tasks [tag]"
+    echo "  $0 add-thread <thread_id> \"summary\" [resolved] [tag1,tag2,tag3...]"
+    echo "  $0 show-thread <thread_id>"
+    echo "  $0 list-threads [tag]"
+    echo "  $0 add-artifact <file_path> [tag1,tag2,tag3...]"
+    echo "  $0 link-artifact <artifact_id> thread <thread_id>"
+    echo "  $0 summarize-artifact <artifact_id>"
+    echo "  $0 dump-artifact <artifact_id>"
+    echo "  $0 list-artifacts [tag]"
+    echo "  $0 add-prompt \"name\" \"content\" [description] [tag1,tag2,tag3...]"
+    echo "  $0 show-prompt <prompt_id>"
+    echo "  $0 list-prompts [tag]"
+    echo "  $0 update-prompt <prompt_id> --name \"new name\" --content \"new content\" --description \"new desc\""
+    echo "  $0 delete-prompt <prompt_id>"
+    echo "  $0 dump-prompt <prompt_id>"
+    echo "  $0 link-prompt <prompt_id> task <task_id>"
+    echo "  $0 tag <type> <id> [tag1,tag2,tag3...]"
+    echo "  $0 tool-overview"
+    echo "  $0 init <db_path>"
+    echo ""
+    echo "Examples:"
+    echo "  $0 add \"Fix login bug\" urgent,frontend"
+    echo "  $0 show 1"
+    echo "  $0 list-tasks"
+    echo "  $0 list-tasks urgent"
+    echo "  $0 add-thread \"abc123\" \"Login discussion\" false bug,discussion"
+    echo "  $0 show-thread \"abc123\""
+    echo "  $0 list-threads"
+    echo "  $0 list-threads bug"
+    echo "  $0 add-artifact \"plan.md\" documentation,planning"
+    echo "  $0 link-artifact 1 thread \"abc123\""
+    echo "  $0 summarize-artifact 1"
+    echo "  $0 dump-artifact 1"
+    echo "  $0 list-artifacts"
+    echo "  $0 list-artifacts documentation"
+    echo "  $0 add-prompt \"Code Review\" \"Please review this code for security issues\" \"Security review prompt\" security,review"
+    echo "  $0 show-prompt 1"
+    echo "  $0 list-prompts security"
+    echo "  $0 update-prompt 1 --content \"Please review this code for security and performance\""
+    echo "  $0 delete-prompt 1"
+    echo "  $0 dump-prompt 1"
+    echo "  $0 link-prompt 1 task 5"
+    echo "  $0 tag task 1 urgent,priority"
+    echo "  $0 tag thread \"abc123\" resolved"
+    echo "  $0 tag artifact 1 outdated"
+    echo "  $0 tag prompt 1 favorite,security"
+    echo "  $0 tool-overview"
+    echo "  $0 init ~/my-tasks.db"
+}
+
+init_database() {
+    if [ $# -eq 0 ]; then
+        echo "Error: Database path required"
+        show_help
+        exit 1
+    fi
+
+    NEW_DB_PATH="$1"
+    
+    # Expand ~ to full path if needed
+    NEW_DB_PATH="${NEW_DB_PATH/#\~/$HOME}"
+    
+    # Check if file already exists
+    if [ -f "$NEW_DB_PATH" ]; then
+        echo "Error: Database file already exists at '$NEW_DB_PATH'"
+        exit 1
+    fi
+    
+    # Create directory if it doesn't exist
+    DB_DIR=$(dirname "$NEW_DB_PATH")
+    if [ ! -d "$DB_DIR" ]; then
+        mkdir -p "$DB_DIR"
+        echo "Created directory: $DB_DIR"
+    fi
+
+    echo "Creating new database at: $NEW_DB_PATH"
+    
+    # Create all the tables with the same schema as the existing database
+    sqlite3 "$NEW_DB_PATH" << 'EOF'
+-- Core tables
+CREATE TABLE amp_threads (
+    thread_id TEXT PRIMARY KEY NOT NULL, 
+    summary TEXT, 
+    resolved BOOLEAN DEFAULT FALSE
+);
+
+CREATE TABLE tasks (
+    id INTEGER PRIMARY KEY, 
+    note TEXT NOT NULL
+);
+
+CREATE TABLE tags (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    label TEXT UNIQUE NOT NULL
+);
+
+CREATE TABLE artifacts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    filename TEXT NOT NULL,
+    content TEXT NOT NULL,
+    summary TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE prompts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    content TEXT NOT NULL,
+    description TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Junction tables for many-to-many relationships
+CREATE TABLE task_tags (
+    task_id INTEGER NOT NULL,
+    tag_id INTEGER NOT NULL,
+    PRIMARY KEY (task_id, tag_id),
+    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+    FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
+);
+
+CREATE TABLE thread_tags (
+    thread_id TEXT NOT NULL,
+    tag_id INTEGER NOT NULL,
+    PRIMARY KEY (thread_id, tag_id),
+    FOREIGN KEY (thread_id) REFERENCES amp_threads(thread_id) ON DELETE CASCADE,
+    FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
+);
+
+CREATE TABLE artifact_task_links (
+    artifact_id INTEGER NOT NULL,
+    task_id INTEGER NOT NULL,
+    PRIMARY KEY (artifact_id, task_id),
+    FOREIGN KEY (artifact_id) REFERENCES artifacts(id) ON DELETE CASCADE,
+    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+);
+
+CREATE TABLE artifact_thread_links (
+    artifact_id INTEGER NOT NULL,
+    thread_id TEXT NOT NULL,
+    PRIMARY KEY (artifact_id, thread_id),
+    FOREIGN KEY (artifact_id) REFERENCES artifacts(id) ON DELETE CASCADE,
+    FOREIGN KEY (thread_id) REFERENCES amp_threads(thread_id) ON DELETE CASCADE
+);
+
+CREATE TABLE artifact_tags (
+    artifact_id INTEGER NOT NULL,
+    tag_id INTEGER NOT NULL,
+    PRIMARY KEY (artifact_id, tag_id),
+    FOREIGN KEY (artifact_id) REFERENCES artifacts(id) ON DELETE CASCADE,
+    FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
+);
+
+CREATE TABLE prompt_tags (
+    prompt_id INTEGER NOT NULL,
+    tag_id INTEGER NOT NULL,
+    PRIMARY KEY (prompt_id, tag_id),
+    FOREIGN KEY (prompt_id) REFERENCES prompts(id) ON DELETE CASCADE,
+    FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
+);
+
+CREATE TABLE prompt_task_links (
+    prompt_id INTEGER NOT NULL,
+    task_id INTEGER NOT NULL,
+    PRIMARY KEY (prompt_id, task_id),
+    FOREIGN KEY (prompt_id) REFERENCES prompts(id) ON DELETE CASCADE,
+    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+);
+
+CREATE TABLE prompt_thread_links (
+    prompt_id INTEGER NOT NULL,
+    thread_id TEXT NOT NULL,
+    PRIMARY KEY (prompt_id, thread_id),
+    FOREIGN KEY (prompt_id) REFERENCES prompts(id) ON DELETE CASCADE,
+    FOREIGN KEY (thread_id) REFERENCES amp_threads(thread_id) ON DELETE CASCADE
+);
+
+CREATE TABLE prompt_artifact_links (
+    prompt_id INTEGER NOT NULL,
+    artifact_id INTEGER NOT NULL,
+    PRIMARY KEY (prompt_id, artifact_id),
+    FOREIGN KEY (prompt_id) REFERENCES prompts(id) ON DELETE CASCADE,
+    FOREIGN KEY (artifact_id) REFERENCES artifacts(id) ON DELETE CASCADE
+);
+EOF
+
+    if [ $? -eq 0 ]; then
+        echo "Database successfully created at: $NEW_DB_PATH"
+        echo ""
+        echo "To use this database, set the TASKS_DB_PATH environment variable:"
+        echo "  export TASKS_DB_PATH=\"$NEW_DB_PATH\""
+        echo ""
+        echo "Add this to your ~/.zshrc to make it permanent:"
+        echo "  echo 'export TASKS_DB_PATH=\"$NEW_DB_PATH\"' >> ~/.zshrc"
+    else
+        echo "Error: Failed to create database"
+        exit 1
+    fi
+}
+
+add_task() {
+    if [ $# -eq 0 ]; then
+        echo "Error: Task description required"
+        show_help
+        exit 1
+    fi
+
+    TASK_NOTE="$1"
+    TAGS="$2"
+
+    # Insert the task and get its ID
+    TASK_ID=$(sqlite3 "$DB_PATH" "INSERT INTO tasks (note) VALUES ('$TASK_NOTE'); SELECT last_insert_rowid();")
+
+    echo "Added task #$TASK_ID: $TASK_NOTE"
+
+    # Process tags if provided
+    if [ -n "$TAGS" ]; then
+        IFS=',' read -ra TAG_ARRAY <<< "$TAGS"
+        for tag in "${TAG_ARRAY[@]}"; do
+            # Trim whitespace
+            tag=$(echo "$tag" | xargs)
+            
+            # Insert tag if it doesn't exist, get its ID
+            TAG_ID=$(sqlite3 "$DB_PATH" "
+                INSERT OR IGNORE INTO tags (label) VALUES ('$tag');
+                SELECT id FROM tags WHERE label = '$tag';
+            ")
+            
+            # Link task to tag
+            sqlite3 "$DB_PATH" "INSERT OR IGNORE INTO task_tags (task_id, tag_id) VALUES ($TASK_ID, $TAG_ID);"
+            echo "  Tagged with: $tag"
+        done
+    fi
+}
+
+add_thread() {
+    if [ $# -lt 2 ]; then
+        echo "Error: Thread ID and summary required"
+        show_help
+        exit 1
+    fi
+
+    THREAD_ID="$1"
+    SUMMARY="$2"
+    RESOLVED="${3:-false}"
+    TAGS="$4"
+
+    # Insert the thread
+    sqlite3 "$DB_PATH" "INSERT OR REPLACE INTO amp_threads (thread_id, summary, resolved) VALUES ('$THREAD_ID', '$SUMMARY', $RESOLVED);"
+
+    echo "Added thread $THREAD_ID: $SUMMARY (resolved: $RESOLVED)"
+
+    # Process tags if provided
+    if [ -n "$TAGS" ]; then
+        IFS=',' read -ra TAG_ARRAY <<< "$TAGS"
+        for tag in "${TAG_ARRAY[@]}"; do
+            # Trim whitespace
+            tag=$(echo "$tag" | xargs)
+            
+            # Insert tag if it doesn't exist, get its ID
+            TAG_ID=$(sqlite3 "$DB_PATH" "
+                INSERT OR IGNORE INTO tags (label) VALUES ('$tag');
+                SELECT id FROM tags WHERE label = '$tag';
+            ")
+            
+            # Link thread to tag
+            sqlite3 "$DB_PATH" "INSERT OR IGNORE INTO thread_tags (thread_id, tag_id) VALUES ('$THREAD_ID', $TAG_ID);"
+            echo "  Tagged with: $tag"
+        done
+    fi
+}
+
+show_task() {
+    if [ $# -eq 0 ]; then
+        echo "Error: Task ID required"
+        show_help
+        exit 1
+    fi
+
+    TASK_ID="$1"
+
+    # Get task with tags
+    RESULT=$(sqlite3 "$DB_PATH" "
+        SELECT t.id, t.note, GROUP_CONCAT(g.label) as tags
+        FROM tasks t
+        LEFT JOIN task_tags tt ON t.id = tt.task_id
+        LEFT JOIN tags g ON tt.tag_id = g.id
+        WHERE t.id = $TASK_ID
+        GROUP BY t.id, t.note;
+    ")
+
+    if [ -z "$RESULT" ]; then
+        echo "Task #$TASK_ID not found"
+        exit 1
+    fi
+
+    echo "$RESULT" | while IFS='|' read -r id note tags; do
+        echo "Task #$id"
+        echo "Note: $note"
+        if [ -n "$tags" ]; then
+            echo "Tags: $tags"
+        else
+            echo "Tags: none"
+        fi
+    done
+}
+
+list_tasks() {
+    TAG_FILTER="$1"
+    
+    if [ -n "$TAG_FILTER" ]; then
+        # Get tasks filtered by specific tag
+        RESULT=$(sqlite3 "$DB_PATH" "
+            SELECT t.id, t.note, GROUP_CONCAT(g.label) as tags
+            FROM tasks t
+            LEFT JOIN task_tags tt ON t.id = tt.task_id
+            LEFT JOIN tags g ON tt.tag_id = g.id
+            WHERE t.id IN (
+                SELECT DISTINCT tt2.task_id 
+                FROM task_tags tt2 
+                JOIN tags g2 ON tt2.tag_id = g2.id 
+                WHERE g2.label = '$TAG_FILTER'
+            )
+            GROUP BY t.id, t.note
+            ORDER BY t.id;
+        ")
+        
+        if [ -z "$RESULT" ]; then
+            echo "No tasks found with tag '$TAG_FILTER'"
+            exit 0
+        fi
+
+        echo "Tasks tagged with '$TAG_FILTER':"
+        echo "==============================="
+    else
+        # Get all tasks with tags
+        RESULT=$(sqlite3 "$DB_PATH" "
+            SELECT t.id, t.note, GROUP_CONCAT(g.label) as tags
+            FROM tasks t
+            LEFT JOIN task_tags tt ON t.id = tt.task_id
+            LEFT JOIN tags g ON tt.tag_id = g.id
+            GROUP BY t.id, t.note
+            ORDER BY t.id;
+        ")
+
+        if [ -z "$RESULT" ]; then
+            echo "No tasks found"
+            exit 0
+        fi
+
+        echo "All Tasks:"
+        echo "=========="
+    fi
+    
+    echo "$RESULT" | while IFS='|' read -r id note tags; do
+        echo "[#$id] $note"
+        if [ -n "$tags" ]; then
+            echo "  Tags: $tags"
+        else
+            echo "  Tags: none"
+        fi
+        echo ""
+    done
+}
+
+show_thread() {
+    if [ $# -eq 0 ]; then
+        echo "Error: Thread ID required"
+        show_help
+        exit 1
+    fi
+
+    THREAD_ID="$1"
+
+    # Get thread with tags
+    RESULT=$(sqlite3 "$DB_PATH" "
+        SELECT t.thread_id, t.summary, t.resolved, GROUP_CONCAT(g.label) as tags
+        FROM amp_threads t
+        LEFT JOIN thread_tags tt ON t.thread_id = tt.thread_id
+        LEFT JOIN tags g ON tt.tag_id = g.id
+        WHERE t.thread_id = '$THREAD_ID'
+        GROUP BY t.thread_id, t.summary, t.resolved;
+    ")
+
+    if [ -z "$RESULT" ]; then
+        echo "Thread $THREAD_ID not found"
+        exit 1
+    fi
+
+    echo "$RESULT" | while IFS='|' read -r thread_id summary resolved tags; do
+        echo "Thread: $thread_id"
+        echo "Summary: $summary"
+        echo "Resolved: $resolved"
+        if [ -n "$tags" ]; then
+            echo "Tags: $tags"
+        else
+            echo "Tags: none"
+        fi
+    done
+}
+
+list_threads() {
+    TAG_FILTER="$1"
+    
+    if [ -n "$TAG_FILTER" ]; then
+        # Get threads filtered by specific tag
+        RESULT=$(sqlite3 "$DB_PATH" "
+            SELECT t.thread_id, t.summary, t.resolved, GROUP_CONCAT(g.label) as tags
+            FROM amp_threads t
+            LEFT JOIN thread_tags tt ON t.thread_id = tt.thread_id
+            LEFT JOIN tags g ON tt.tag_id = g.id
+            WHERE t.thread_id IN (
+                SELECT DISTINCT tt2.thread_id 
+                FROM thread_tags tt2 
+                JOIN tags g2 ON tt2.tag_id = g2.id 
+                WHERE g2.label = '$TAG_FILTER'
+            )
+            GROUP BY t.thread_id, t.summary, t.resolved
+            ORDER BY t.thread_id;
+        ")
+        
+        if [ -z "$RESULT" ]; then
+            echo "No threads found with tag '$TAG_FILTER'"
+            exit 0
+        fi
+
+        echo "Threads tagged with '$TAG_FILTER':"
+        echo "=================================="
+    else
+        # Get all threads with tags and summaries
+        RESULT=$(sqlite3 "$DB_PATH" "
+            SELECT t.thread_id, t.summary, t.resolved, GROUP_CONCAT(g.label) as tags
+            FROM amp_threads t
+            LEFT JOIN thread_tags tt ON t.thread_id = tt.thread_id
+            LEFT JOIN tags g ON tt.tag_id = g.id
+            GROUP BY t.thread_id, t.summary, t.resolved
+            ORDER BY t.thread_id;
+        ")
+
+        if [ -z "$RESULT" ]; then
+            echo "No threads found"
+            exit 0
+        fi
+
+        echo "All Threads:"
+        echo "============"
+    fi
+    
+    echo "$RESULT" | while IFS='|' read -r thread_id summary resolved tags; do
+        echo "[$thread_id] $summary (resolved: $resolved)"
+        if [ -n "$tags" ]; then
+            echo "  Tags: $tags"
+        else
+            echo "  Tags: none"
+        fi
+        echo ""
+    done
+}
+
+add_artifact() {
+    if [ $# -eq 0 ]; then
+        echo "Error: File path required"
+        show_help
+        exit 1
+    fi
+
+    FILE_PATH="$1"
+    TAGS="$2"
+
+    # Check if file exists
+    if [ ! -f "$FILE_PATH" ]; then
+        echo "Error: File '$FILE_PATH' not found"
+        exit 1
+    fi
+
+    # Get filename from path and escape single quotes for SQL
+    FILENAME=$(basename "$FILE_PATH" | sed "s/'/''/g")
+    
+    # Read file content and escape single quotes for SQL
+    CONTENT=$(cat "$FILE_PATH" | sed "s/'/''/g")
+
+    # Insert the artifact and get its ID
+    ARTIFACT_ID=$(sqlite3 "$DB_PATH" "INSERT INTO artifacts (filename, content) VALUES ('$FILENAME', '$CONTENT'); SELECT last_insert_rowid();")
+
+    echo "Added artifact #$ARTIFACT_ID: $FILENAME"
+
+    # Process tags if provided
+    if [ -n "$TAGS" ]; then
+        IFS=',' read -ra TAG_ARRAY <<< "$TAGS"
+        for tag in "${TAG_ARRAY[@]}"; do
+            # Trim whitespace
+            tag=$(echo "$tag" | xargs)
+            
+            # Escape single quotes in tag
+            tag_escaped=$(echo "$tag" | sed "s/'/''/g")
+            
+            # Insert tag if it doesn't exist, get its ID
+            TAG_ID=$(sqlite3 "$DB_PATH" "
+                INSERT OR IGNORE INTO tags (label) VALUES ('$tag_escaped');
+                SELECT id FROM tags WHERE label = '$tag_escaped';
+            ")
+            
+            # Link artifact to tag
+            sqlite3 "$DB_PATH" "INSERT OR IGNORE INTO artifact_tags (artifact_id, tag_id) VALUES ($ARTIFACT_ID, $TAG_ID);"
+            echo "  Tagged with: $tag"
+        done
+    fi
+}
+
+link_artifact() {
+    if [ $# -lt 3 ]; then
+        echo "Error: artifact_id, link_type, and target_id required"
+        show_help
+        exit 1
+    fi
+
+    ARTIFACT_ID="$1"
+    LINK_TYPE="$2"
+    TARGET_ID="$3"
+
+    case "$LINK_TYPE" in
+        "thread")
+            sqlite3 "$DB_PATH" "INSERT OR IGNORE INTO artifact_thread_links (artifact_id, thread_id) VALUES ($ARTIFACT_ID, '$TARGET_ID');"
+            echo "Linked artifact #$ARTIFACT_ID to thread $TARGET_ID"
+            ;;
+        "task")
+            sqlite3 "$DB_PATH" "INSERT OR IGNORE INTO artifact_task_links (artifact_id, task_id) VALUES ($ARTIFACT_ID, $TARGET_ID);"
+            echo "Linked artifact #$ARTIFACT_ID to task #$TARGET_ID"
+            ;;
+        *)
+            echo "Error: Link type must be 'thread' or 'task'"
+            exit 1
+            ;;
+    esac
+}
+
+summarize_artifact() {
+    if [ $# -eq 0 ]; then
+        echo "Error: Artifact ID required"
+        show_help
+        exit 1
+    fi
+
+    ARTIFACT_ID="$1"
+
+    # Get artifact content
+    CONTENT=$(sqlite3 "$DB_PATH" "SELECT content FROM artifacts WHERE id = $ARTIFACT_ID;")
+
+    if [ -z "$CONTENT" ]; then
+        echo "Artifact #$ARTIFACT_ID not found"
+        exit 1
+    fi
+
+    echo "Generating summary for artifact #$ARTIFACT_ID..."
+
+    # Generate summary using claude CLI
+    SUMMARY=$(echo "$CONTENT" | claude "Provide exactly one title sentence or phrase that summarizes this markdown content:")
+
+    if [ $? -eq 0 ]; then
+        # Update the summary field
+        sqlite3 "$DB_PATH" "UPDATE artifacts SET summary = '$SUMMARY' WHERE id = $ARTIFACT_ID;"
+        echo "Summary updated for artifact #$ARTIFACT_ID"
+        echo "Summary: $SUMMARY"
+    else
+        echo "Error: Failed to generate summary using claude CLI"
+        exit 1
+    fi
+}
+
+dump_artifact() {
+    if [ $# -eq 0 ]; then
+        echo "Error: Artifact ID required"
+        show_help
+        exit 1
+    fi
+
+    ARTIFACT_ID="$1"
+
+    # Get and output raw artifact content
+    CONTENT=$(sqlite3 "$DB_PATH" "SELECT content FROM artifacts WHERE id = $ARTIFACT_ID;")
+
+    if [ -z "$CONTENT" ]; then
+        echo "Artifact #$ARTIFACT_ID not found" >&2
+        exit 1
+    fi
+
+    echo "$CONTENT"
+}
+
+list_artifacts() {
+    TAG_FILTER="$1"
+    
+    if [ -n "$TAG_FILTER" ]; then
+        # Get artifacts filtered by specific tag
+        RESULT=$(sqlite3 "$DB_PATH" "
+            SELECT a.id, a.filename, a.summary, GROUP_CONCAT(g.label) as tags, a.created_at
+            FROM artifacts a
+            LEFT JOIN artifact_tags at ON a.id = at.artifact_id
+            LEFT JOIN tags g ON at.tag_id = g.id
+            WHERE a.id IN (
+                SELECT DISTINCT at2.artifact_id 
+                FROM artifact_tags at2 
+                JOIN tags g2 ON at2.tag_id = g2.id 
+                WHERE g2.label = '$TAG_FILTER'
+            )
+            GROUP BY a.id, a.filename, a.summary, a.created_at
+            ORDER BY a.created_at DESC;
+        ")
+        
+        if [ -z "$RESULT" ]; then
+            echo "No artifacts found with tag '$TAG_FILTER'"
+            exit 0
+        fi
+
+        echo "Artifacts tagged with '$TAG_FILTER':"
+        echo "===================================="
+    else
+        # Get all artifacts with tags
+        RESULT=$(sqlite3 "$DB_PATH" "
+            SELECT a.id, a.filename, a.summary, GROUP_CONCAT(g.label) as tags, a.created_at
+            FROM artifacts a
+            LEFT JOIN artifact_tags at ON a.id = at.artifact_id
+            LEFT JOIN tags g ON at.tag_id = g.id
+            GROUP BY a.id, a.filename, a.summary, a.created_at
+            ORDER BY a.created_at DESC;
+        ")
+
+        if [ -z "$RESULT" ]; then
+            echo "No artifacts found"
+            exit 0
+        fi
+
+        echo "All Artifacts:"
+        echo "=============="
+    fi
+    
+    echo "$RESULT" | while IFS='|' read -r id filename summary tags created_at; do
+        echo "[#$id] $filename"
+        if [ -n "$summary" ] && [ "$summary" != "" ]; then
+            echo "  Summary: $summary"
+        fi
+        if [ -n "$tags" ]; then
+            echo "  Tags: $tags"
+        else
+            echo "  Tags: none"
+        fi
+        echo "  Created: $created_at"
+        echo ""
+    done
+}
+
+add_prompt() {
+    if [ $# -eq 0 ]; then
+        echo "Error: Prompt name and content required"
+        show_help
+        exit 1
+    fi
+
+    PROMPT_NAME="$1"
+    PROMPT_CONTENT="$2"
+    PROMPT_DESCRIPTION="$3"
+    TAGS="$4"
+
+    if [ -z "$PROMPT_CONTENT" ]; then
+        echo "Error: Prompt content required"
+        show_help
+        exit 1
+    fi
+
+    # Escape single quotes for SQL
+    PROMPT_NAME_ESCAPED=$(echo "$PROMPT_NAME" | sed "s/'/''/g")
+    PROMPT_CONTENT_ESCAPED=$(echo "$PROMPT_CONTENT" | sed "s/'/''/g")
+    PROMPT_DESCRIPTION_ESCAPED=$(echo "$PROMPT_DESCRIPTION" | sed "s/'/''/g")
+
+    # Insert the prompt and get its ID
+    if [ -n "$PROMPT_DESCRIPTION" ]; then
+        PROMPT_ID=$(sqlite3 "$DB_PATH" "INSERT INTO prompts (name, content, description) VALUES ('$PROMPT_NAME_ESCAPED', '$PROMPT_CONTENT_ESCAPED', '$PROMPT_DESCRIPTION_ESCAPED'); SELECT last_insert_rowid();")
+    else
+        PROMPT_ID=$(sqlite3 "$DB_PATH" "INSERT INTO prompts (name, content) VALUES ('$PROMPT_NAME_ESCAPED', '$PROMPT_CONTENT_ESCAPED'); SELECT last_insert_rowid();")
+    fi
+
+    echo "Added prompt #$PROMPT_ID: $PROMPT_NAME"
+
+    # Process tags if provided
+    if [ -n "$TAGS" ]; then
+        IFS=',' read -ra TAG_ARRAY <<< "$TAGS"
+        for tag in "${TAG_ARRAY[@]}"; do
+            # Trim whitespace
+            tag=$(echo "$tag" | xargs)
+            
+            # Escape single quotes in tag
+            tag_escaped=$(echo "$tag" | sed "s/'/''/g")
+            
+            # Insert tag if it doesn't exist, get its ID
+            TAG_ID=$(sqlite3 "$DB_PATH" "
+                INSERT OR IGNORE INTO tags (label) VALUES ('$tag_escaped');
+                SELECT id FROM tags WHERE label = '$tag_escaped';
+            ")
+            
+            # Link prompt to tag
+            sqlite3 "$DB_PATH" "INSERT OR IGNORE INTO prompt_tags (prompt_id, tag_id) VALUES ($PROMPT_ID, $TAG_ID);"
+            echo "  Tagged with: $tag"
+        done
+    fi
+}
+
+show_prompt() {
+    if [ $# -eq 0 ]; then
+        echo "Error: Prompt ID required"
+        show_help
+        exit 1
+    fi
+
+    PROMPT_ID="$1"
+
+    # Get prompt with tags
+    RESULT=$(sqlite3 "$DB_PATH" "
+        SELECT p.id, p.name, p.description, p.content, GROUP_CONCAT(g.label) as tags, p.created_at, p.updated_at
+        FROM prompts p
+        LEFT JOIN prompt_tags pt ON p.id = pt.prompt_id
+        LEFT JOIN tags g ON pt.tag_id = g.id
+        WHERE p.id = $PROMPT_ID
+        GROUP BY p.id, p.name, p.description, p.content, p.created_at, p.updated_at;
+    ")
+
+    if [ -z "$RESULT" ]; then
+        echo "Prompt #$PROMPT_ID not found"
+        exit 1
+    fi
+
+    echo "$RESULT" | while IFS='|' read -r id name description content tags created_at updated_at; do
+        echo "Prompt #$id: $name"
+        if [ -n "$description" ] && [ "$description" != "" ]; then
+            echo "Description: $description"
+        fi
+        echo "Content: $content"
+        if [ -n "$tags" ]; then
+            echo "Tags: $tags"
+        else
+            echo "Tags: none"
+        fi
+        echo "Created: $created_at"
+        echo "Updated: $updated_at"
+    done
+}
+
+list_prompts() {
+    TAG_FILTER="$1"
+    
+    if [ -n "$TAG_FILTER" ]; then
+        # Get prompts filtered by specific tag
+        RESULT=$(sqlite3 "$DB_PATH" "
+            SELECT p.id, p.name, p.description, GROUP_CONCAT(g.label) as tags, p.created_at
+            FROM prompts p
+            LEFT JOIN prompt_tags pt ON p.id = pt.prompt_id
+            LEFT JOIN tags g ON pt.tag_id = g.id
+            WHERE p.id IN (
+                SELECT DISTINCT pt2.prompt_id 
+                FROM prompt_tags pt2 
+                JOIN tags g2 ON pt2.tag_id = g2.id 
+                WHERE g2.label = '$TAG_FILTER'
+            )
+            GROUP BY p.id, p.name, p.description, p.created_at
+            ORDER BY p.created_at DESC;
+        ")
+        
+        if [ -z "$RESULT" ]; then
+            echo "No prompts found with tag '$TAG_FILTER'"
+            exit 0
+        fi
+
+        echo "Prompts tagged with '$TAG_FILTER':"
+        echo "================================="
+    else
+        # Get all prompts with tags
+        RESULT=$(sqlite3 "$DB_PATH" "
+            SELECT p.id, p.name, p.description, GROUP_CONCAT(g.label) as tags, p.created_at
+            FROM prompts p
+            LEFT JOIN prompt_tags pt ON p.id = pt.prompt_id
+            LEFT JOIN tags g ON pt.tag_id = g.id
+            GROUP BY p.id, p.name, p.description, p.created_at
+            ORDER BY p.created_at DESC;
+        ")
+
+        if [ -z "$RESULT" ]; then
+            echo "No prompts found"
+            exit 0
+        fi
+
+        echo "All Prompts:"
+        echo "==========="
+    fi
+    
+    echo "$RESULT" | while IFS='|' read -r id name description tags created_at; do
+        echo "[#$id] $name"
+        if [ -n "$description" ] && [ "$description" != "" ]; then
+            echo "  Description: $description"
+        fi
+        if [ -n "$tags" ]; then
+            echo "  Tags: $tags"
+        else
+            echo "  Tags: none"
+        fi
+        echo "  Created: $created_at"
+        echo ""
+    done
+}
+
+update_prompt() {
+    if [ $# -lt 2 ]; then
+        echo "Error: Prompt ID and at least one field to update required"
+        show_help
+        exit 1
+    fi
+
+    PROMPT_ID="$1"
+    shift
+
+    # Check if prompt exists
+    PROMPT_EXISTS=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM prompts WHERE id = $PROMPT_ID;")
+    if [ "$PROMPT_EXISTS" -eq 0 ]; then
+        echo "Error: Prompt #$PROMPT_ID not found"
+        exit 1
+    fi
+
+    # Parse update parameters
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --name)
+                if [ -z "$2" ]; then
+                    echo "Error: --name requires a value"
+                    exit 1
+                fi
+                NAME_ESCAPED=$(echo "$2" | sed "s/'/''/g")
+                sqlite3 "$DB_PATH" "UPDATE prompts SET name = '$NAME_ESCAPED', updated_at = CURRENT_TIMESTAMP WHERE id = $PROMPT_ID;"
+                echo "Updated name for prompt #$PROMPT_ID"
+                shift 2
+                ;;
+            --content)
+                if [ -z "$2" ]; then
+                    echo "Error: --content requires a value"
+                    exit 1
+                fi
+                CONTENT_ESCAPED=$(echo "$2" | sed "s/'/''/g")
+                sqlite3 "$DB_PATH" "UPDATE prompts SET content = '$CONTENT_ESCAPED', updated_at = CURRENT_TIMESTAMP WHERE id = $PROMPT_ID;"
+                echo "Updated content for prompt #$PROMPT_ID"
+                shift 2
+                ;;
+            --description)
+                DESCRIPTION_ESCAPED=$(echo "$2" | sed "s/'/''/g")
+                sqlite3 "$DB_PATH" "UPDATE prompts SET description = '$DESCRIPTION_ESCAPED', updated_at = CURRENT_TIMESTAMP WHERE id = $PROMPT_ID;"
+                echo "Updated description for prompt #$PROMPT_ID"
+                shift 2
+                ;;
+            *)
+                echo "Error: Unknown parameter '$1'"
+                echo "Valid parameters: --name, --content, --description"
+                exit 1
+                ;;
+        esac
+    done
+}
+
+delete_prompt() {
+    if [ $# -eq 0 ]; then
+        echo "Error: Prompt ID required"
+        show_help
+        exit 1
+    fi
+
+    PROMPT_ID="$1"
+
+    # Check if prompt exists
+    PROMPT_EXISTS=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM prompts WHERE id = $PROMPT_ID;")
+    if [ "$PROMPT_EXISTS" -eq 0 ]; then
+        echo "Error: Prompt #$PROMPT_ID not found"
+        exit 1
+    fi
+
+    # Get prompt name for confirmation
+    PROMPT_NAME=$(sqlite3 "$DB_PATH" "SELECT name FROM prompts WHERE id = $PROMPT_ID;")
+
+    # Delete the prompt (CASCADE will handle related records)
+    sqlite3 "$DB_PATH" "DELETE FROM prompts WHERE id = $PROMPT_ID;"
+    
+    echo "Deleted prompt #$PROMPT_ID: $PROMPT_NAME"
+}
+
+dump_prompt() {
+    if [ $# -eq 0 ]; then
+        echo "Error: Prompt ID required"
+        show_help
+        exit 1
+    fi
+
+    PROMPT_ID="$1"
+
+    # Get and output raw prompt content
+    CONTENT=$(sqlite3 "$DB_PATH" "SELECT content FROM prompts WHERE id = $PROMPT_ID;")
+
+    if [ -z "$CONTENT" ]; then
+        echo "Prompt #$PROMPT_ID not found" >&2
+        exit 1
+    fi
+
+    echo "$CONTENT"
+}
+
+link_prompt() {
+    if [ $# -lt 3 ]; then
+        echo "Error: prompt_id, link_type, and target_id required"
+        show_help
+        exit 1
+    fi
+
+    PROMPT_ID="$1"
+    LINK_TYPE="$2"
+    TARGET_ID="$3"
+
+    case "$LINK_TYPE" in
+        "task")
+            sqlite3 "$DB_PATH" "INSERT OR IGNORE INTO prompt_task_links (prompt_id, task_id) VALUES ($PROMPT_ID, $TARGET_ID);"
+            echo "Linked prompt #$PROMPT_ID to task #$TARGET_ID"
+            ;;
+        "thread")
+            sqlite3 "$DB_PATH" "INSERT OR IGNORE INTO prompt_thread_links (prompt_id, thread_id) VALUES ($PROMPT_ID, '$TARGET_ID');"
+            echo "Linked prompt #$PROMPT_ID to thread $TARGET_ID"
+            ;;
+        "artifact")
+            sqlite3 "$DB_PATH" "INSERT OR IGNORE INTO prompt_artifact_links (prompt_id, artifact_id) VALUES ($PROMPT_ID, $TARGET_ID);"
+            echo "Linked prompt #$PROMPT_ID to artifact #$TARGET_ID"
+            ;;
+        *)
+            echo "Error: Link type must be 'task', 'thread', or 'artifact'"
+            exit 1
+            ;;
+    esac
+}
+
+tag_entity() {
+    if [ $# -lt 2 ]; then
+        echo "Error: Entity type and ID required"
+        show_help
+        exit 1
+    fi
+
+    ENTITY_TYPE="$1"
+    ENTITY_ID="$2"
+    TAGS="$3"
+
+    if [ -z "$TAGS" ]; then
+        echo "Error: At least one tag required"
+        show_help
+        exit 1
+    fi
+
+    # Validate entity type and check if entity exists
+    case "$ENTITY_TYPE" in
+        "task")
+            ENTITY_EXISTS=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM tasks WHERE id = $ENTITY_ID;")
+            if [ "$ENTITY_EXISTS" -eq 0 ]; then
+                echo "Error: Task #$ENTITY_ID not found"
+                exit 1
+            fi
+            JUNCTION_TABLE="task_tags"
+            FOREIGN_KEY="task_id"
+            ;;
+        "thread")
+            ENTITY_EXISTS=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM amp_threads WHERE thread_id = '$ENTITY_ID';")
+            if [ "$ENTITY_EXISTS" -eq 0 ]; then
+                echo "Error: Thread $ENTITY_ID not found"
+                exit 1
+            fi
+            JUNCTION_TABLE="thread_tags"
+            FOREIGN_KEY="thread_id"
+            ;;
+        "artifact")
+            ENTITY_EXISTS=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM artifacts WHERE id = $ENTITY_ID;")
+            if [ "$ENTITY_EXISTS" -eq 0 ]; then
+                echo "Error: Artifact #$ENTITY_ID not found"
+                exit 1
+            fi
+            JUNCTION_TABLE="artifact_tags"
+            FOREIGN_KEY="artifact_id"
+            ;;
+        "prompt")
+            ENTITY_EXISTS=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM prompts WHERE id = $ENTITY_ID;")
+            if [ "$ENTITY_EXISTS" -eq 0 ]; then
+                echo "Error: Prompt #$ENTITY_ID not found"
+                exit 1
+            fi
+            JUNCTION_TABLE="prompt_tags"
+            FOREIGN_KEY="prompt_id"
+            ;;
+        *)
+            echo "Error: Entity type must be 'task', 'thread', 'artifact', or 'prompt'"
+            exit 1
+            ;;
+    esac
+
+    echo "Adding tags to $ENTITY_TYPE $ENTITY_ID:"
+
+    # Process tags
+    IFS=',' read -ra TAG_ARRAY <<< "$TAGS"
+    for tag in "${TAG_ARRAY[@]}"; do
+        # Trim whitespace
+        tag=$(echo "$tag" | xargs)
+        
+        # Escape single quotes in tag
+        tag_escaped=$(echo "$tag" | sed "s/'/''/g")
+        
+        # Insert tag if it doesn't exist, get its ID
+        TAG_ID=$(sqlite3 "$DB_PATH" "
+            INSERT OR IGNORE INTO tags (label) VALUES ('$tag_escaped');
+            SELECT id FROM tags WHERE label = '$tag_escaped';
+        ")
+        
+        # Link entity to tag based on type
+        if [ "$ENTITY_TYPE" = "thread" ]; then
+            # Thread IDs are text, need quotes
+            sqlite3 "$DB_PATH" "INSERT OR IGNORE INTO $JUNCTION_TABLE ($FOREIGN_KEY, tag_id) VALUES ('$ENTITY_ID', $TAG_ID);"
+        else
+            # Task, artifact, and prompt IDs are integers, no quotes
+            sqlite3 "$DB_PATH" "INSERT OR IGNORE INTO $JUNCTION_TABLE ($FOREIGN_KEY, tag_id) VALUES ($ENTITY_ID, $TAG_ID);"
+        fi
+        
+        echo "  Tagged with: $tag"
+    done
+}
+
+tool_overview() {
+    cat << 'EOF'
+TASKS TOOL OVERVIEW FOR AGENTIC CODING
+
+Purpose: Track work across coding sessions, maintain AI conversation context, store development artifacts and reusable prompts with flexible tagging and linking.
+
+CORE ENTITIES:
+1. Tasks - Work items/backlog: tasks add "description" tags | tasks list-tasks [tag] | tasks show <id>
+2. Threads - AI conversations: tasks add-thread "id" "summary" [resolved] [tags] | tasks list-threads [tag]
+3. Artifacts - Documents/code: tasks add-artifact "file.md" [tags] | tasks dump-artifact <id> | tasks summarize-artifact <id>
+4. Prompts - Reusable AI prompts: tasks add-prompt "name" "content" [description] [tags] | tasks list-prompts [tag]
+5. Tags - Auto-created labels for filtering: urgent,backend,bug,resolved,project-a
+
+KEY COMMANDS:
+tasks add "Fix login" urgent,backend
+tasks add-thread "conv123" "Fixed OAuth bug" true bug,resolved  
+tasks add-artifact "design.md" architecture,planning
+tasks add-prompt "Code Review" "Review for bugs and performance" security,review
+tasks link-artifact 1 thread "conv123"
+tasks link-prompt 1 task 5
+tasks list-tasks urgent
+tasks list-threads resolved
+tasks list-prompts security
+tasks dump-artifact 1 | claude "analyze this"
+tasks dump-prompt 1 | claude
+tasks tag task 1 blocked,high
+tasks update-prompt 1 --content "New prompt text"
+
+WORKFLOW PATTERNS:
+Feature Development:
+- tasks add "New feature" feature,high
+- tasks add-artifact "design.md" feature,planning
+- tasks add-prompt "Feature Review" "Review implementation approach" feature,review
+- tasks add-thread "conv456" "Discussed implementation" false feature
+- tasks link-artifact 1 task 1; tasks link-prompt 1 task 1; tasks link-artifact 1 thread "conv456"
+
+Bug Tracking:
+- tasks add "Session timeout bug" bug,urgent
+- tasks add-thread "debug789" "Found config issue" true bug,resolved
+- tasks add-artifact "fix.md" bug,solution
+- tasks add-prompt "Bug Analysis" "Analyze root cause and fix" debugging,analysis
+- Link all together with link commands
+
+Prompt Library Management:
+- tasks add-prompt "Security Review" "Check for vulnerabilities" security,review
+- tasks add-prompt "Performance Audit" "Analyze performance bottlenecks" performance,optimization
+- tasks add-prompt "Code Quality" "Review code style and maintainability" quality,standards
+- tasks list-prompts security
+- tasks dump-prompt 2 | claude "Additional context here"
+
+Project Organization:
+- Use project tags: project-a,project-b
+- Filter everything: tasks list-tasks project-a, tasks list-prompts project-a
+- Technology tags: react,python,docker
+- Status tags: blocked,testing,done
+- Prompt categories: security,performance,debugging,review
+
+BEST PRACTICES:
+- Always log significant AI conversations as threads
+- Store all design docs, solutions, notes as artifacts  
+- Build a reusable prompt library for common tasks
+- Link prompts to related tasks/threads/artifacts for context
+- Use consistent tagging: component,type,priority,status
+- Mark threads resolved when complete
+- Reference artifact/prompt IDs in commit messages and code comments
+- Pipe content to AI: tasks dump-artifact 5 | claude "prompt" or tasks dump-prompt 3 | claude
+- Update prompts as you refine them: tasks update-prompt 1 --content "improved version"
+
+PROMPT MANAGEMENT:
+- Create templates: tasks add-prompt "API Review" "Review API design for..." api,template
+- Version control: Use descriptive names and update existing prompts rather than duplicating
+- Context linking: Link prompts to tasks/artifacts they're commonly used with
+- Tag consistently: security,performance,debugging,review,analysis,template
+
+COMMON TAGS: urgent,high,low | frontend,backend,api,database | bug,feature,refactor | blocked,testing,resolved | react,python,sql | security,performance,debugging,review,analysis,template
+
+The system becomes more valuable with consistent use - every stored artifact, logged thread, and reusable prompt creates richer context for future AI interactions.
+EOF
+}
+
+# Main command dispatch
+case "$1" in
+    "add")
+        shift
+        add_task "$@"
+        ;;
+    "show")
+        shift
+        show_task "$@"
+        ;;
+    "list-tasks")
+        shift
+        list_tasks "$@"
+        ;;
+    "add-thread")
+        shift
+        add_thread "$@"
+        ;;
+    "show-thread")
+        shift
+        show_thread "$@"
+        ;;
+    "list-threads")
+        shift
+        list_threads "$@"
+        ;;
+    "add-artifact")
+        shift
+        add_artifact "$@"
+        ;;
+    "link-artifact")
+        shift
+        link_artifact "$@"
+        ;;
+    "summarize-artifact")
+        shift
+        summarize_artifact "$@"
+        ;;
+    "dump-artifact")
+        shift
+        dump_artifact "$@"
+        ;;
+    "list-artifacts")
+        shift
+        list_artifacts "$@"
+        ;;
+    "add-prompt")
+        shift
+        add_prompt "$@"
+        ;;
+    "show-prompt")
+        shift
+        show_prompt "$@"
+        ;;
+    "list-prompts")
+        shift
+        list_prompts "$@"
+        ;;
+    "update-prompt")
+        shift
+        update_prompt "$@"
+        ;;
+    "delete-prompt")
+        shift
+        delete_prompt "$@"
+        ;;
+    "dump-prompt")
+        shift
+        dump_prompt "$@"
+        ;;
+    "link-prompt")
+        shift
+        link_prompt "$@"
+        ;;
+    "tag")
+        shift
+        tag_entity "$@"
+        ;;
+    "tool-overview")
+        tool_overview
+        ;;
+    "init")
+        shift
+        init_database "$@"
+        ;;
+    *)
+        show_help
+        ;;
+esac
