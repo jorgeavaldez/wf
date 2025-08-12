@@ -13,19 +13,19 @@ export WF_DB_PATH=/path/to/your/plans.db
 
 Tell your AI to check what's available:
 ```bash
-wf tool-overview
+wf tool overview
 ```
 
 Tell it to grab specific artifacts to follow:
 ```bash
-wf dump-artifact 9
+wf dump artifact 9
 ```
 
 The AI can store its own artifacts internally:
 ```bash
 # AI saves design docs, plans, solutions
-wf add-artifact "design.md" architecture,planning
-wf add-artifact "solution.md" implementation,fix
+wf add artifact "design.md" architecture,planning
+wf add artifact "solution.md" implementation,fix
 ```
 
 ## Basic Usage
@@ -35,11 +35,11 @@ wf add-artifact "solution.md" implementation,fix
 wf add "Fix the bug" urgent,backend
 
 # Log AI conversations  
-wf add-thread "conv123" "Discussed the fix" false bug
+wf add thread "conv123" "Discussed the fix" false bug
 
 # Find stuff later
-wf list-tasks urgent
-wf dump-artifact 1 | claude "analyze this"
+wf list tasks urgent
+wf dump artifact 1 | claude "analyze this"
 ```
 
 Perfect for maintaining context across AI coding sessions.
