@@ -1,5 +1,6 @@
 #!/bin/bash
 
+# Test comment for pre-commit hook
 DB_PATH="${WF_DB_PATH:-/wf.db}"
 
 show_help() {
