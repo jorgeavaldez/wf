@@ -7,55 +7,55 @@ show_help() {
     echo "Usage:"
     echo "  $0 add \"task description\" [tag1,tag2,tag3...]"
     echo "  $0 show <task_id>"
-    echo "  $0 list-tasks [tag]"
-    echo "  $0 add-thread <thread_id> \"summary\" [resolved] [tag1,tag2,tag3...]"
-    echo "  $0 show-thread <thread_id>"
-    echo "  $0 list-threads [tag]"
-    echo "  $0 add-artifact <file_path> [tag1,tag2,tag3...]"
-    echo "  $0 link-artifact <artifact_id> thread <thread_id>"
-    echo "  $0 summarize-artifact <artifact_id>"
-    echo "  $0 dump-artifact <artifact_id>"
-    echo "  $0 list-artifacts [tag]"
-    echo "  $0 add-prompt <file_path> [tag1,tag2,tag3...]"
-    echo "  $0 show-prompt <prompt_id>"
-    echo "  $0 list-prompts [tag]"
-    echo "  $0 update-prompt <prompt_id> --name \"new name\" --content \"new content\" --description \"new desc\""
-    echo "  $0 delete-prompt <prompt_id>"
-    echo "  $0 summarize-prompt <prompt_id>"
-    echo "  $0 dump-prompt <prompt_id>"
-    echo "  $0 link-prompt <prompt_id> task <task_id>"
+    echo "  $0 list tasks [tag]"
+    echo "  $0 add thread <thread_id> \"summary\" [resolved] [tag1,tag2,tag3...]"
+    echo "  $0 show thread <thread_id>"
+    echo "  $0 list threads [tag]"
+    echo "  $0 add artifact <file_path> [tag1,tag2,tag3...]"
+    echo "  $0 link artifact <artifact_id> thread <thread_id>"
+    echo "  $0 summarize artifact <artifact_id>"
+    echo "  $0 dump artifact <artifact_id>"
+    echo "  $0 list artifacts [tag]"
+    echo "  $0 add prompt <file_path> [tag1,tag2,tag3...]"
+    echo "  $0 show prompt <prompt_id>"
+    echo "  $0 list prompts [tag]"
+    echo "  $0 update prompt <prompt_id> --name \"new name\" --content \"new content\" --description \"new desc\""
+    echo "  $0 delete prompt <prompt_id>"
+    echo "  $0 summarize prompt <prompt_id>"
+    echo "  $0 dump prompt <prompt_id>"
+    echo "  $0 link prompt <prompt_id> task <task_id>"
     echo "  $0 tag <type> <id> [tag1,tag2,tag3...]"
-    echo "  $0 tool-overview"
+    echo "  $0 tool overview"
     echo "  $0 init <db_path>"
     echo ""
     echo "Examples:"
     echo "  $0 add \"Fix login bug\" urgent,frontend"
     echo "  $0 show 1"
-    echo "  $0 list-tasks"
-    echo "  $0 list-tasks urgent"
-    echo "  $0 add-thread \"abc123\" \"Login discussion\" false bug,discussion"
-    echo "  $0 show-thread \"abc123\""
-    echo "  $0 list-threads"
-    echo "  $0 list-threads bug"
-    echo "  $0 add-artifact \"plan.md\" documentation,planning"
-    echo "  $0 link-artifact 1 thread \"abc123\""
-    echo "  $0 summarize-artifact 1"
-    echo "  $0 dump-artifact 1"
-    echo "  $0 list-artifacts"
-    echo "  $0 list-artifacts documentation"
-    echo "  $0 add-prompt \"prompt.md\" security,review"
-    echo "  $0 show-prompt 1"
-    echo "  $0 list-prompts security"
-    echo "  $0 update-prompt 1 --content \"Please review this code for security and performance\""
-    echo "  $0 delete-prompt 1"
-    echo "  $0 summarize-prompt 1"
-    echo "  $0 dump-prompt 1"
-    echo "  $0 link-prompt 1 task 5"
+    echo "  $0 list tasks"
+    echo "  $0 list tasks urgent"
+    echo "  $0 add thread \"abc123\" \"Login discussion\" false bug,discussion"
+    echo "  $0 show thread \"abc123\""
+    echo "  $0 list threads"
+    echo "  $0 list threads bug"
+    echo "  $0 add artifact \"plan.md\" documentation,planning"
+    echo "  $0 link artifact 1 thread \"abc123\""
+    echo "  $0 summarize artifact 1"
+    echo "  $0 dump artifact 1"
+    echo "  $0 list artifacts"
+    echo "  $0 list artifacts documentation"
+    echo "  $0 add prompt \"prompt.md\" security,review"
+    echo "  $0 show prompt 1"
+    echo "  $0 list prompts security"
+    echo "  $0 update prompt 1 --content \"Please review this code for security and performance\""
+    echo "  $0 delete prompt 1"
+    echo "  $0 summarize prompt 1"
+    echo "  $0 dump prompt 1"
+    echo "  $0 link prompt 1 task 5"
     echo "  $0 tag task 1 urgent,priority"
     echo "  $0 tag thread \"abc123\" resolved"
     echo "  $0 tag artifact 1 outdated"
     echo "  $0 tag prompt 1 favorite,security"
-    echo "  $0 tool-overview"
+    echo "  $0 tool overview"
     echo "  $0 init ~/my-wf.db"
 }
 
@@ -1076,53 +1076,53 @@ WF TOOL OVERVIEW FOR AGENTIC CODING
 Purpose: Track work across coding sessions, maintain AI conversation context, store development artifacts and reusable prompts with flexible tagging and linking.
 
 CORE ENTITIES:
-1. Tasks - Work items/backlog: wf add "description" tags | wf list-tasks [tag] | wf show <id>
-2. Threads - AI conversations: wf add-thread "id" "summary" [resolved] [tags] | wf list-threads [tag]
-3. Artifacts - Documents/code: wf add-artifact "file.md" [tags] | wf dump-artifact <id> | wf summarize-artifact <id>
-4. Prompts - Reusable AI prompts: wf add-prompt "file.md" [tags] | wf summarize-prompt <id> | wf list-prompts [tag]
+1. Tasks - Work items/backlog: wf add "description" tags | wf list tasks [tag] | wf show <id>
+2. Threads - AI conversations: wf add thread "id" "summary" [resolved] [tags] | wf list threads [tag]
+3. Artifacts - Documents/code: wf add artifact "file.md" [tags] | wf dump artifact <id> | wf summarize artifact <id>
+4. Prompts - Reusable AI prompts: wf add prompt "file.md" [tags] | wf summarize prompt <id> | wf list prompts [tag]
 5. Tags - Auto-created labels for filtering: urgent,backend,bug,resolved,project-a
 
 KEY COMMANDS:
 wf add "Fix login" urgent,backend
-wf add-thread "conv123" "Fixed OAuth bug" true bug,resolved  
-wf add-artifact "design.md" architecture,planning
-wf add-prompt "code-review.md" security,review
-wf summarize-prompt 1
-wf link-artifact 1 thread "conv123"
-wf link-prompt 1 task 5
-wf list-tasks urgent
-wf list-threads resolved
-wf list-prompts security
-wf dump-artifact 1 | claude "analyze this"
-wf dump-prompt 1 | claude
+wf add thread "conv123" "Fixed OAuth bug" true bug,resolved  
+wf add artifact "design.md" architecture,planning
+wf add prompt "code-review.md" security,review
+wf summarize prompt 1
+wf link artifact 1 thread "conv123"
+wf link prompt 1 task 5
+wf list tasks urgent
+wf list threads resolved
+wf list prompts security
+wf dump artifact 1 | claude "analyze this"
+wf dump prompt 1 | claude
 wf tag task 1 blocked,high
-wf update-prompt 1 --content "New prompt text"
+wf update prompt 1 --content "New prompt text"
 
 WORKFLOW PATTERNS:
 Feature Development:
 - wf add "New feature" feature,high
-- wf add-artifact "design.md" feature,planning
-- wf add-prompt "feature-review.md" feature,review
-- wf add-thread "conv456" "Discussed implementation" false feature
-- wf link-artifact 1 task 1; wf link-prompt 1 task 1; wf link-artifact 1 thread "conv456"
+- wf add artifact "design.md" feature,planning
+- wf add prompt "feature-review.md" feature,review
+- wf add thread "conv456" "Discussed implementation" false feature
+- wf link artifact 1 task 1; wf link prompt 1 task 1; wf link artifact 1 thread "conv456"
 
 Bug Tracking:
 - wf add "Session timeout bug" bug,urgent
-- wf add-thread "debug789" "Found config issue" true bug,resolved
-- wf add-artifact "fix.md" bug,solution
-- wf add-prompt "bug-analysis.md" debugging,analysis
+- wf add thread "debug789" "Found config issue" true bug,resolved
+- wf add artifact "fix.md" bug,solution
+- wf add prompt "bug-analysis.md" debugging,analysis
 - Link all together with link commands
 
 Prompt Library Management:
-- wf add-prompt "security-review.md" security,review
-- wf add-prompt "performance-audit.md" performance,optimization
-- wf add-prompt "code-quality.md" quality,standards
-- wf list-prompts security
-- wf dump-prompt 2 | claude "Additional context here"
+- wf add prompt "security-review.md" security,review
+- wf add prompt "performance-audit.md" performance,optimization
+- wf add prompt "code-quality.md" quality,standards
+- wf list prompts security
+- wf dump prompt 2 | claude "Additional context here"
 
 Project Organization:
 - Use project tags: project-a,project-b
-- Filter everything: wf list-tasks project-a, wf list-prompts project-a
+- Filter everything: wf list tasks project-a, wf list prompts project-a
 - Technology tags: react,python,docker
 - Status tags: blocked,testing,done
 - Prompt categories: security,performance,debugging,review
@@ -1135,11 +1135,11 @@ BEST PRACTICES:
 - Use consistent tagging: component,type,priority,status
 - Mark threads resolved when complete
 - Reference artifact/prompt IDs in commit messages and code comments
-- Pipe content to AI: wf dump-artifact 5 | claude "prompt" or wf dump-prompt 3 | claude
-- Update prompts as you refine them: wf update-prompt 1 --content "improved version"
+- Pipe content to AI: wf dump artifact 5 | claude "prompt" or wf dump prompt 3 | claude
+- Update prompts as you refine them: wf update prompt 1 --content "improved version"
 
 PROMPT MANAGEMENT:
-- Create templates: wf add-prompt "api-review.md" api,template
+- Create templates: wf add prompt "api-review.md" api,template
 - Version control: Use descriptive names and update existing prompts rather than duplicating
 - Context linking: Link prompts to tasks/artifacts they're commonly used with
 - Tag consistently: security,performance,debugging,review,analysis,template
@@ -1150,8 +1150,47 @@ The system becomes more valuable with consistent use - every stored artifact, lo
 EOF
 }
 
+# Handle space-separated commands (convert to dash format for compatibility)
+COMMAND="$1"
+if [ $# -ge 2 ]; then
+    case "$1 $2" in
+        "list tasks"|"list threads"|"list artifacts"|"list prompts")
+            COMMAND="$1-$2"
+            shift
+            ;;
+        "add thread"|"add artifact"|"add prompt")
+            COMMAND="$1-$2"
+            shift
+            ;;
+        "show thread"|"show prompt")
+            COMMAND="$1-$2"
+            shift
+            ;;
+        "link artifact"|"link prompt")
+            COMMAND="$1-$2"
+            shift
+            ;;
+        "summarize artifact"|"summarize prompt")
+            COMMAND="$1-$2"
+            shift
+            ;;
+        "dump artifact"|"dump prompt")
+            COMMAND="$1-$2"
+            shift
+            ;;
+        "update prompt"|"delete prompt")
+            COMMAND="$1-$2"
+            shift
+            ;;
+        "tool overview")
+            COMMAND="tool-overview"
+            shift
+            ;;
+    esac
+fi
+
 # Main command dispatch
-case "$1" in
+case "$COMMAND" in
     "add")
         shift
         add_task "$@"
