@@ -1,9 +1,9 @@
 #!/bin/bash
 
-DB_PATH="${TASKS_DB_PATH:-/plans.db}"
+DB_PATH="${WF_DB_PATH:-/wf.db}"
 
 show_help() {
-    echo "Task Manager CLI"
+    echo "wf - Workflow Manager CLI"
     echo "Usage:"
     echo "  $0 add \"task description\" [tag1,tag2,tag3...]"
     echo "  $0 show <task_id>"
@@ -54,7 +54,7 @@ show_help() {
     echo "  $0 tag artifact 1 outdated"
     echo "  $0 tag prompt 1 favorite,security"
     echo "  $0 tool-overview"
-    echo "  $0 init ~/my-tasks.db"
+    echo "  $0 init ~/my-wf.db"
 }
 
 init_database() {
@@ -197,11 +197,11 @@ EOF
     if [ $? -eq 0 ]; then
         echo "Database successfully created at: $NEW_DB_PATH"
         echo ""
-        echo "To use this database, set the TASKS_DB_PATH environment variable:"
-        echo "  export TASKS_DB_PATH=\"$NEW_DB_PATH\""
+        echo "To use this database, set the WF_DB_PATH environment variable:"
+        echo "  export WF_DB_PATH=\"$NEW_DB_PATH\""
         echo ""
         echo "Add this to your ~/.zshrc to make it permanent:"
-        echo "  echo 'export TASKS_DB_PATH=\"$NEW_DB_PATH\"' >> ~/.zshrc"
+        echo "  echo 'export WF_DB_PATH=\"$NEW_DB_PATH\"' >> ~/.zshrc"
     else
         echo "Error: Failed to create database"
         exit 1
@@ -1040,57 +1040,57 @@ tag_entity() {
 
 tool_overview() {
     cat << 'EOF'
-TASKS TOOL OVERVIEW FOR AGENTIC CODING
+WF TOOL OVERVIEW FOR AGENTIC CODING
 
 Purpose: Track work across coding sessions, maintain AI conversation context, store development artifacts and reusable prompts with flexible tagging and linking.
 
 CORE ENTITIES:
-1. Tasks - Work items/backlog: tasks add "description" tags | tasks list-tasks [tag] | tasks show <id>
-2. Threads - AI conversations: tasks add-thread "id" "summary" [resolved] [tags] | tasks list-threads [tag]
-3. Artifacts - Documents/code: tasks add-artifact "file.md" [tags] | tasks dump-artifact <id> | tasks summarize-artifact <id>
-4. Prompts - Reusable AI prompts: tasks add-prompt "name" "content" [description] [tags] | tasks list-prompts [tag]
+1. Tasks - Work items/backlog: wf add "description" tags | wf list-tasks [tag] | wf show <id>
+2. Threads - AI conversations: wf add-thread "id" "summary" [resolved] [tags] | wf list-threads [tag]
+3. Artifacts - Documents/code: wf add-artifact "file.md" [tags] | wf dump-artifact <id> | wf summarize-artifact <id>
+4. Prompts - Reusable AI prompts: wf add-prompt "name" "content" [description] [tags] | wf list-prompts [tag]
 5. Tags - Auto-created labels for filtering: urgent,backend,bug,resolved,project-a
 
 KEY COMMANDS:
-tasks add "Fix login" urgent,backend
-tasks add-thread "conv123" "Fixed OAuth bug" true bug,resolved  
-tasks add-artifact "design.md" architecture,planning
-tasks add-prompt "Code Review" "Review for bugs and performance" security,review
-tasks link-artifact 1 thread "conv123"
-tasks link-prompt 1 task 5
-tasks list-tasks urgent
-tasks list-threads resolved
-tasks list-prompts security
-tasks dump-artifact 1 | claude "analyze this"
-tasks dump-prompt 1 | claude
-tasks tag task 1 blocked,high
-tasks update-prompt 1 --content "New prompt text"
+wf add "Fix login" urgent,backend
+wf add-thread "conv123" "Fixed OAuth bug" true bug,resolved  
+wf add-artifact "design.md" architecture,planning
+wf add-prompt "Code Review" "Review for bugs and performance" security,review
+wf link-artifact 1 thread "conv123"
+wf link-prompt 1 task 5
+wf list-tasks urgent
+wf list-threads resolved
+wf list-prompts security
+wf dump-artifact 1 | claude "analyze this"
+wf dump-prompt 1 | claude
+wf tag task 1 blocked,high
+wf update-prompt 1 --content "New prompt text"
 
 WORKFLOW PATTERNS:
 Feature Development:
-- tasks add "New feature" feature,high
-- tasks add-artifact "design.md" feature,planning
-- tasks add-prompt "Feature Review" "Review implementation approach" feature,review
-- tasks add-thread "conv456" "Discussed implementation" false feature
-- tasks link-artifact 1 task 1; tasks link-prompt 1 task 1; tasks link-artifact 1 thread "conv456"
+- wf add "New feature" feature,high
+- wf add-artifact "design.md" feature,planning
+- wf add-prompt "Feature Review" "Review implementation approach" feature,review
+- wf add-thread "conv456" "Discussed implementation" false feature
+- wf link-artifact 1 task 1; wf link-prompt 1 task 1; wf link-artifact 1 thread "conv456"
 
 Bug Tracking:
-- tasks add "Session timeout bug" bug,urgent
-- tasks add-thread "debug789" "Found config issue" true bug,resolved
-- tasks add-artifact "fix.md" bug,solution
-- tasks add-prompt "Bug Analysis" "Analyze root cause and fix" debugging,analysis
+- wf add "Session timeout bug" bug,urgent
+- wf add-thread "debug789" "Found config issue" true bug,resolved
+- wf add-artifact "fix.md" bug,solution
+- wf add-prompt "Bug Analysis" "Analyze root cause and fix" debugging,analysis
 - Link all together with link commands
 
 Prompt Library Management:
-- tasks add-prompt "Security Review" "Check for vulnerabilities" security,review
-- tasks add-prompt "Performance Audit" "Analyze performance bottlenecks" performance,optimization
-- tasks add-prompt "Code Quality" "Review code style and maintainability" quality,standards
-- tasks list-prompts security
-- tasks dump-prompt 2 | claude "Additional context here"
+- wf add-prompt "Security Review" "Check for vulnerabilities" security,review
+- wf add-prompt "Performance Audit" "Analyze performance bottlenecks" performance,optimization
+- wf add-prompt "Code Quality" "Review code style and maintainability" quality,standards
+- wf list-prompts security
+- wf dump-prompt 2 | claude "Additional context here"
 
 Project Organization:
 - Use project tags: project-a,project-b
-- Filter everything: tasks list-tasks project-a, tasks list-prompts project-a
+- Filter everything: wf list-tasks project-a, wf list-prompts project-a
 - Technology tags: react,python,docker
 - Status tags: blocked,testing,done
 - Prompt categories: security,performance,debugging,review
@@ -1103,11 +1103,11 @@ BEST PRACTICES:
 - Use consistent tagging: component,type,priority,status
 - Mark threads resolved when complete
 - Reference artifact/prompt IDs in commit messages and code comments
-- Pipe content to AI: tasks dump-artifact 5 | claude "prompt" or tasks dump-prompt 3 | claude
-- Update prompts as you refine them: tasks update-prompt 1 --content "improved version"
+- Pipe content to AI: wf dump-artifact 5 | claude "prompt" or wf dump-prompt 3 | claude
+- Update prompts as you refine them: wf update-prompt 1 --content "improved version"
 
 PROMPT MANAGEMENT:
-- Create templates: tasks add-prompt "API Review" "Review API design for..." api,template
+- Create templates: wf add-prompt "API Review" "Review API design for..." api,template
 - Version control: Use descriptive names and update existing prompts rather than duplicating
 - Context linking: Link prompts to tasks/artifacts they're commonly used with
 - Tag consistently: security,performance,debugging,review,analysis,template
