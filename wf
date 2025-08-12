@@ -16,11 +16,12 @@ show_help() {
     echo "  $0 summarize-artifact <artifact_id>"
     echo "  $0 dump-artifact <artifact_id>"
     echo "  $0 list-artifacts [tag]"
-    echo "  $0 add-prompt \"name\" \"content\" [description] [tag1,tag2,tag3...]"
+    echo "  $0 add-prompt <file_path> [tag1,tag2,tag3...]"
     echo "  $0 show-prompt <prompt_id>"
     echo "  $0 list-prompts [tag]"
     echo "  $0 update-prompt <prompt_id> --name \"new name\" --content \"new content\" --description \"new desc\""
     echo "  $0 delete-prompt <prompt_id>"
+    echo "  $0 summarize-prompt <prompt_id>"
     echo "  $0 dump-prompt <prompt_id>"
     echo "  $0 link-prompt <prompt_id> task <task_id>"
     echo "  $0 tag <type> <id> [tag1,tag2,tag3...]"
@@ -42,11 +43,12 @@ show_help() {
     echo "  $0 dump-artifact 1"
     echo "  $0 list-artifacts"
     echo "  $0 list-artifacts documentation"
-    echo "  $0 add-prompt \"Code Review\" \"Please review this code for security issues\" \"Security review prompt\" security,review"
+    echo "  $0 add-prompt \"prompt.md\" security,review"
     echo "  $0 show-prompt 1"
     echo "  $0 list-prompts security"
     echo "  $0 update-prompt 1 --content \"Please review this code for security and performance\""
     echo "  $0 delete-prompt 1"
+    echo "  $0 summarize-prompt 1"
     echo "  $0 dump-prompt 1"
     echo "  $0 link-prompt 1 task 5"
     echo "  $0 tag task 1 urgent,priority"
@@ -661,33 +663,28 @@ list_artifacts() {
 
 add_prompt() {
     if [ $# -eq 0 ]; then
-        echo "Error: Prompt name and content required"
+        echo "Error: File path required"
         show_help
         exit 1
     fi
 
-    PROMPT_NAME="$1"
-    PROMPT_CONTENT="$2"
-    PROMPT_DESCRIPTION="$3"
-    TAGS="$4"
+    FILE_PATH="$1"
+    TAGS="$2"
 
-    if [ -z "$PROMPT_CONTENT" ]; then
-        echo "Error: Prompt content required"
-        show_help
+    # Check if file exists
+    if [ ! -f "$FILE_PATH" ]; then
+        echo "Error: File '$FILE_PATH' not found"
         exit 1
     fi
 
-    # Escape single quotes for SQL
-    PROMPT_NAME_ESCAPED=$(echo "$PROMPT_NAME" | sed "s/'/''/g")
-    PROMPT_CONTENT_ESCAPED=$(echo "$PROMPT_CONTENT" | sed "s/'/''/g")
-    PROMPT_DESCRIPTION_ESCAPED=$(echo "$PROMPT_DESCRIPTION" | sed "s/'/''/g")
+    # Get filename from path and escape single quotes for SQL
+    PROMPT_NAME=$(basename "$FILE_PATH" | sed "s/'/''/g")
+    
+    # Read file content and escape single quotes for SQL
+    PROMPT_CONTENT=$(cat "$FILE_PATH" | sed "s/'/''/g")
 
     # Insert the prompt and get its ID
-    if [ -n "$PROMPT_DESCRIPTION" ]; then
-        PROMPT_ID=$(sqlite3 "$DB_PATH" "INSERT INTO prompts (name, content, description) VALUES ('$PROMPT_NAME_ESCAPED', '$PROMPT_CONTENT_ESCAPED', '$PROMPT_DESCRIPTION_ESCAPED'); SELECT last_insert_rowid();")
-    else
-        PROMPT_ID=$(sqlite3 "$DB_PATH" "INSERT INTO prompts (name, content) VALUES ('$PROMPT_NAME_ESCAPED', '$PROMPT_CONTENT_ESCAPED'); SELECT last_insert_rowid();")
-    fi
+    PROMPT_ID=$(sqlite3 "$DB_PATH" "INSERT INTO prompts (name, content) VALUES ('$PROMPT_NAME', '$PROMPT_CONTENT'); SELECT last_insert_rowid();")
 
     echo "Added prompt #$PROMPT_ID: $PROMPT_NAME"
 
@@ -896,6 +893,40 @@ delete_prompt() {
     echo "Deleted prompt #$PROMPT_ID: $PROMPT_NAME"
 }
 
+summarize_prompt() {
+    if [ $# -eq 0 ]; then
+        echo "Error: Prompt ID required"
+        show_help
+        exit 1
+    fi
+
+    PROMPT_ID="$1"
+
+    # Get prompt content
+    CONTENT=$(sqlite3 "$DB_PATH" "SELECT content FROM prompts WHERE id = $PROMPT_ID;")
+
+    if [ -z "$CONTENT" ]; then
+        echo "Prompt #$PROMPT_ID not found"
+        exit 1
+    fi
+
+    echo "Generating summary for prompt #$PROMPT_ID..."
+
+    # Generate summary using claude CLI
+    SUMMARY=$(echo "$CONTENT" | claude "Provide exactly one title sentence or phrase that summarizes this prompt content:")
+
+    if [ $? -eq 0 ]; then
+        # Update the description field with the summary
+        SUMMARY_ESCAPED=$(echo "$SUMMARY" | sed "s/'/''/g")
+        sqlite3 "$DB_PATH" "UPDATE prompts SET description = '$SUMMARY_ESCAPED', updated_at = CURRENT_TIMESTAMP WHERE id = $PROMPT_ID;"
+        echo "Summary updated for prompt #$PROMPT_ID"
+        echo "Summary: $SUMMARY"
+    else
+        echo "Error: Failed to generate summary using claude CLI"
+        exit 1
+    fi
+}
+
 dump_prompt() {
     if [ $# -eq 0 ]; then
         echo "Error: Prompt ID required"
@@ -1048,14 +1079,15 @@ CORE ENTITIES:
 1. Tasks - Work items/backlog: wf add "description" tags | wf list-tasks [tag] | wf show <id>
 2. Threads - AI conversations: wf add-thread "id" "summary" [resolved] [tags] | wf list-threads [tag]
 3. Artifacts - Documents/code: wf add-artifact "file.md" [tags] | wf dump-artifact <id> | wf summarize-artifact <id>
-4. Prompts - Reusable AI prompts: wf add-prompt "name" "content" [description] [tags] | wf list-prompts [tag]
+4. Prompts - Reusable AI prompts: wf add-prompt "file.md" [tags] | wf summarize-prompt <id> | wf list-prompts [tag]
 5. Tags - Auto-created labels for filtering: urgent,backend,bug,resolved,project-a
 
 KEY COMMANDS:
 wf add "Fix login" urgent,backend
 wf add-thread "conv123" "Fixed OAuth bug" true bug,resolved  
 wf add-artifact "design.md" architecture,planning
-wf add-prompt "Code Review" "Review for bugs and performance" security,review
+wf add-prompt "code-review.md" security,review
+wf summarize-prompt 1
 wf link-artifact 1 thread "conv123"
 wf link-prompt 1 task 5
 wf list-tasks urgent
@@ -1070,7 +1102,7 @@ WORKFLOW PATTERNS:
 Feature Development:
 - wf add "New feature" feature,high
 - wf add-artifact "design.md" feature,planning
-- wf add-prompt "Feature Review" "Review implementation approach" feature,review
+- wf add-prompt "feature-review.md" feature,review
 - wf add-thread "conv456" "Discussed implementation" false feature
 - wf link-artifact 1 task 1; wf link-prompt 1 task 1; wf link-artifact 1 thread "conv456"
 
@@ -1078,13 +1110,13 @@ Bug Tracking:
 - wf add "Session timeout bug" bug,urgent
 - wf add-thread "debug789" "Found config issue" true bug,resolved
 - wf add-artifact "fix.md" bug,solution
-- wf add-prompt "Bug Analysis" "Analyze root cause and fix" debugging,analysis
+- wf add-prompt "bug-analysis.md" debugging,analysis
 - Link all together with link commands
 
 Prompt Library Management:
-- wf add-prompt "Security Review" "Check for vulnerabilities" security,review
-- wf add-prompt "Performance Audit" "Analyze performance bottlenecks" performance,optimization
-- wf add-prompt "Code Quality" "Review code style and maintainability" quality,standards
+- wf add-prompt "security-review.md" security,review
+- wf add-prompt "performance-audit.md" performance,optimization
+- wf add-prompt "code-quality.md" quality,standards
 - wf list-prompts security
 - wf dump-prompt 2 | claude "Additional context here"
 
@@ -1107,7 +1139,7 @@ BEST PRACTICES:
 - Update prompts as you refine them: wf update-prompt 1 --content "improved version"
 
 PROMPT MANAGEMENT:
-- Create templates: wf add-prompt "API Review" "Review API design for..." api,template
+- Create templates: wf add-prompt "api-review.md" api,template
 - Version control: Use descriptive names and update existing prompts rather than duplicating
 - Context linking: Link prompts to tasks/artifacts they're commonly used with
 - Tag consistently: security,performance,debugging,review,analysis,template
@@ -1183,6 +1215,10 @@ case "$1" in
     "delete-prompt")
         shift
         delete_prompt "$@"
+        ;;
+    "summarize-prompt")
+        shift
+        summarize_prompt "$@"
         ;;
     "dump-prompt")
         shift
