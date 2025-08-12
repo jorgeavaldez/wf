@@ -359,18 +359,27 @@ list_tasks() {
     fi
     
     if [ -n "$TAG_FILTER" ]; then
-        # Get tasks filtered by specific tag
+        # Parse multiple tags separated by commas
+        IFS=',' read -ra FILTER_TAGS <<< "$TAG_FILTER"
+        TAG_COUNT=${#FILTER_TAGS[@]}
+        
+        # Build WHERE conditions for multiple tags (AND logic)
+        TAG_CONDITIONS=""
+        for i in "${!FILTER_TAGS[@]}"; do
+            tag=$(echo "${FILTER_TAGS[$i]}" | xargs) # trim whitespace
+            if [ $i -gt 0 ]; then
+                TAG_CONDITIONS="$TAG_CONDITIONS AND "
+            fi
+            TAG_CONDITIONS="${TAG_CONDITIONS}t.id IN (SELECT tt${i}.task_id FROM task_tags tt${i} JOIN tags g${i} ON tt${i}.tag_id = g${i}.id WHERE g${i}.label = '$tag')"
+        done
+        
+        # Get tasks filtered by multiple tags (must have ALL specified tags)
         RESULT=$(sqlite3 "$DB_PATH" "
             SELECT t.id, t.note, GROUP_CONCAT(g.label) as tags
             FROM tasks t
             LEFT JOIN task_tags tt ON t.id = tt.task_id
             LEFT JOIN tags g ON tt.tag_id = g.id
-            WHERE t.id IN (
-                SELECT DISTINCT tt2.task_id 
-                FROM task_tags tt2 
-                JOIN tags g2 ON tt2.tag_id = g2.id 
-                WHERE g2.label = '$TAG_FILTER'
-            )
+            WHERE $TAG_CONDITIONS
             GROUP BY t.id, t.note
             ORDER BY t.id DESC
             $LIMIT_CLAUSE;
@@ -493,18 +502,27 @@ list_threads() {
     fi
     
     if [ -n "$TAG_FILTER" ]; then
-        # Get threads filtered by specific tag
+        # Parse multiple tags separated by commas
+        IFS=',' read -ra FILTER_TAGS <<< "$TAG_FILTER"
+        TAG_COUNT=${#FILTER_TAGS[@]}
+        
+        # Build WHERE conditions for multiple tags (AND logic)
+        TAG_CONDITIONS=""
+        for i in "${!FILTER_TAGS[@]}"; do
+            tag=$(echo "${FILTER_TAGS[$i]}" | xargs) # trim whitespace
+            if [ $i -gt 0 ]; then
+                TAG_CONDITIONS="$TAG_CONDITIONS AND "
+            fi
+            TAG_CONDITIONS="${TAG_CONDITIONS}t.thread_id IN (SELECT tt${i}.thread_id FROM thread_tags tt${i} JOIN tags g${i} ON tt${i}.tag_id = g${i}.id WHERE g${i}.label = '$tag')"
+        done
+        
+        # Get threads filtered by multiple tags (must have ALL specified tags)
         RESULT=$(sqlite3 "$DB_PATH" "
             SELECT t.thread_id, t.summary, t.resolved, GROUP_CONCAT(g.label) as tags
             FROM amp_threads t
             LEFT JOIN thread_tags tt ON t.thread_id = tt.thread_id
             LEFT JOIN tags g ON tt.tag_id = g.id
-            WHERE t.thread_id IN (
-                SELECT DISTINCT tt2.thread_id 
-                FROM thread_tags tt2 
-                JOIN tags g2 ON tt2.tag_id = g2.id 
-                WHERE g2.label = '$TAG_FILTER'
-            )
+            WHERE $TAG_CONDITIONS
             GROUP BY t.thread_id, t.summary, t.resolved
             ORDER BY t.thread_id DESC
             $LIMIT_CLAUSE;
@@ -721,18 +739,27 @@ list_artifacts() {
     fi
     
     if [ -n "$TAG_FILTER" ]; then
-        # Get artifacts filtered by specific tag
+        # Parse multiple tags separated by commas
+        IFS=',' read -ra FILTER_TAGS <<< "$TAG_FILTER"
+        TAG_COUNT=${#FILTER_TAGS[@]}
+        
+        # Build WHERE conditions for multiple tags (AND logic)
+        TAG_CONDITIONS=""
+        for i in "${!FILTER_TAGS[@]}"; do
+            tag=$(echo "${FILTER_TAGS[$i]}" | xargs) # trim whitespace
+            if [ $i -gt 0 ]; then
+                TAG_CONDITIONS="$TAG_CONDITIONS AND "
+            fi
+            TAG_CONDITIONS="${TAG_CONDITIONS}a.id IN (SELECT at${i}.artifact_id FROM artifact_tags at${i} JOIN tags g${i} ON at${i}.tag_id = g${i}.id WHERE g${i}.label = '$tag')"
+        done
+        
+        # Get artifacts filtered by multiple tags (must have ALL specified tags)
         RESULT=$(sqlite3 "$DB_PATH" "
             SELECT a.id, a.filename, a.summary, GROUP_CONCAT(g.label) as tags, a.created_at
             FROM artifacts a
             LEFT JOIN artifact_tags at ON a.id = at.artifact_id
             LEFT JOIN tags g ON at.tag_id = g.id
-            WHERE a.id IN (
-                SELECT DISTINCT at2.artifact_id 
-                FROM artifact_tags at2 
-                JOIN tags g2 ON at2.tag_id = g2.id 
-                WHERE g2.label = '$TAG_FILTER'
-            )
+            WHERE $TAG_CONDITIONS
             GROUP BY a.id, a.filename, a.summary, a.created_at
             ORDER BY a.created_at DESC
             $LIMIT_CLAUSE;
@@ -913,18 +940,27 @@ list_prompts() {
     fi
     
     if [ -n "$TAG_FILTER" ]; then
-        # Get prompts filtered by specific tag
+        # Parse multiple tags separated by commas
+        IFS=',' read -ra FILTER_TAGS <<< "$TAG_FILTER"
+        TAG_COUNT=${#FILTER_TAGS[@]}
+        
+        # Build WHERE conditions for multiple tags (AND logic)
+        TAG_CONDITIONS=""
+        for i in "${!FILTER_TAGS[@]}"; do
+            tag=$(echo "${FILTER_TAGS[$i]}" | xargs) # trim whitespace
+            if [ $i -gt 0 ]; then
+                TAG_CONDITIONS="$TAG_CONDITIONS AND "
+            fi
+            TAG_CONDITIONS="${TAG_CONDITIONS}p.id IN (SELECT pt${i}.prompt_id FROM prompt_tags pt${i} JOIN tags g${i} ON pt${i}.tag_id = g${i}.id WHERE g${i}.label = '$tag')"
+        done
+        
+        # Get prompts filtered by multiple tags (must have ALL specified tags)
         RESULT=$(sqlite3 "$DB_PATH" "
             SELECT p.id, p.name, p.description, GROUP_CONCAT(g.label) as tags, p.created_at
             FROM prompts p
             LEFT JOIN prompt_tags pt ON p.id = pt.prompt_id
             LEFT JOIN tags g ON pt.tag_id = g.id
-            WHERE p.id IN (
-                SELECT DISTINCT pt2.prompt_id 
-                FROM prompt_tags pt2 
-                JOIN tags g2 ON pt2.tag_id = g2.id 
-                WHERE g2.label = '$TAG_FILTER'
-            )
+            WHERE $TAG_CONDITIONS
             GROUP BY p.id, p.name, p.description, p.created_at
             ORDER BY p.created_at DESC
             $LIMIT_CLAUSE;
