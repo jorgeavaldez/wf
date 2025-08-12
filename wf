@@ -67,16 +67,16 @@ init_database() {
     fi
 
     NEW_DB_PATH="$1"
-    
+
     # Expand ~ to full path if needed
     NEW_DB_PATH="${NEW_DB_PATH/#\~/$HOME}"
-    
+
     # Check if file already exists
     if [ -f "$NEW_DB_PATH" ]; then
         echo "Error: Database file already exists at '$NEW_DB_PATH'"
         exit 1
     fi
-    
+
     # Create directory if it doesn't exist
     DB_DIR=$(dirname "$NEW_DB_PATH")
     if [ ! -d "$DB_DIR" ]; then
@@ -85,9 +85,9 @@ init_database() {
     fi
 
     echo "Creating new database at: $NEW_DB_PATH"
-    
+
     # Create all the tables with the same schema as the existing database
-    sqlite3 "$NEW_DB_PATH" << 'EOF'
+    sqlite3 "$NEW_DB_PATH" <<'EOF'
 -- Core tables
 CREATE TABLE amp_threads (
     thread_id TEXT PRIMARY KEY NOT NULL, 
@@ -227,17 +227,17 @@ add_task() {
 
     # Process tags if provided
     if [ -n "$TAGS" ]; then
-        IFS=',' read -ra TAG_ARRAY <<< "$TAGS"
+        IFS=',' read -ra TAG_ARRAY <<<"$TAGS"
         for tag in "${TAG_ARRAY[@]}"; do
             # Trim whitespace
             tag=$(echo "$tag" | xargs)
-            
+
             # Insert tag if it doesn't exist, get its ID
             TAG_ID=$(sqlite3 "$DB_PATH" "
                 INSERT OR IGNORE INTO tags (label) VALUES ('$tag');
                 SELECT id FROM tags WHERE label = '$tag';
             ")
-            
+
             # Link task to tag
             sqlite3 "$DB_PATH" "INSERT OR IGNORE INTO task_tags (task_id, tag_id) VALUES ($TASK_ID, $TAG_ID);"
             echo "  Tagged with: $tag"
@@ -264,17 +264,17 @@ add_thread() {
 
     # Process tags if provided
     if [ -n "$TAGS" ]; then
-        IFS=',' read -ra TAG_ARRAY <<< "$TAGS"
+        IFS=',' read -ra TAG_ARRAY <<<"$TAGS"
         for tag in "${TAG_ARRAY[@]}"; do
             # Trim whitespace
             tag=$(echo "$tag" | xargs)
-            
+
             # Insert tag if it doesn't exist, get its ID
             TAG_ID=$(sqlite3 "$DB_PATH" "
                 INSERT OR IGNORE INTO tags (label) VALUES ('$tag');
                 SELECT id FROM tags WHERE label = '$tag';
             ")
-            
+
             # Link thread to tag
             sqlite3 "$DB_PATH" "INSERT OR IGNORE INTO thread_tags (thread_id, tag_id) VALUES ('$THREAD_ID', $TAG_ID);"
             echo "  Tagged with: $tag"
@@ -322,7 +322,7 @@ list_tasks() {
     SHOW_ALL=false
     COUNT=""
     TAG_FILTER=""
-    
+
     while [ $# -gt 0 ]; do
         case "$1" in
             "--all")
@@ -346,23 +346,23 @@ list_tasks() {
                 ;;
         esac
     done
-    
+
     # Set default limit if neither --all nor --count specified
     if [ "$SHOW_ALL" = false ] && [ -z "$COUNT" ]; then
         COUNT="5"
     fi
-    
+
     # Build LIMIT clause
     LIMIT_CLAUSE=""
     if [ "$SHOW_ALL" = false ] && [ -n "$COUNT" ]; then
         LIMIT_CLAUSE="LIMIT $COUNT"
     fi
-    
+
     if [ -n "$TAG_FILTER" ]; then
         # Parse multiple tags separated by commas
-        IFS=',' read -ra FILTER_TAGS <<< "$TAG_FILTER"
+        IFS=',' read -ra FILTER_TAGS <<<"$TAG_FILTER"
         TAG_COUNT=${#FILTER_TAGS[@]}
-        
+
         # Build WHERE conditions for multiple tags (AND logic)
         TAG_CONDITIONS=""
         for i in "${!FILTER_TAGS[@]}"; do
@@ -372,7 +372,7 @@ list_tasks() {
             fi
             TAG_CONDITIONS="${TAG_CONDITIONS}t.id IN (SELECT tt${i}.task_id FROM task_tags tt${i} JOIN tags g${i} ON tt${i}.tag_id = g${i}.id WHERE g${i}.label = '$tag')"
         done
-        
+
         # Get tasks filtered by multiple tags (must have ALL specified tags)
         RESULT=$(sqlite3 "$DB_PATH" "
             SELECT t.id, t.note, GROUP_CONCAT(g.label) as tags
@@ -384,7 +384,7 @@ list_tasks() {
             ORDER BY t.id DESC
             $LIMIT_CLAUSE;
         ")
-        
+
         if [ -z "$RESULT" ]; then
             echo "No tasks found with tag '$TAG_FILTER'"
             exit 0
@@ -412,7 +412,7 @@ list_tasks() {
         echo "All Tasks:"
         echo "=========="
     fi
-    
+
     echo "$RESULT" | while IFS='|' read -r id note tags; do
         echo "[#$id] $note"
         if [ -n "$tags" ]; then
@@ -465,7 +465,7 @@ list_threads() {
     SHOW_ALL=false
     COUNT=""
     TAG_FILTER=""
-    
+
     while [ $# -gt 0 ]; do
         case "$1" in
             "--all")
@@ -489,23 +489,23 @@ list_threads() {
                 ;;
         esac
     done
-    
+
     # Set default limit if neither --all nor --count specified
     if [ "$SHOW_ALL" = false ] && [ -z "$COUNT" ]; then
         COUNT="5"
     fi
-    
+
     # Build LIMIT clause
     LIMIT_CLAUSE=""
     if [ "$SHOW_ALL" = false ] && [ -n "$COUNT" ]; then
         LIMIT_CLAUSE="LIMIT $COUNT"
     fi
-    
+
     if [ -n "$TAG_FILTER" ]; then
         # Parse multiple tags separated by commas
-        IFS=',' read -ra FILTER_TAGS <<< "$TAG_FILTER"
+        IFS=',' read -ra FILTER_TAGS <<<"$TAG_FILTER"
         TAG_COUNT=${#FILTER_TAGS[@]}
-        
+
         # Build WHERE conditions for multiple tags (AND logic)
         TAG_CONDITIONS=""
         for i in "${!FILTER_TAGS[@]}"; do
@@ -515,7 +515,7 @@ list_threads() {
             fi
             TAG_CONDITIONS="${TAG_CONDITIONS}t.thread_id IN (SELECT tt${i}.thread_id FROM thread_tags tt${i} JOIN tags g${i} ON tt${i}.tag_id = g${i}.id WHERE g${i}.label = '$tag')"
         done
-        
+
         # Get threads filtered by multiple tags (must have ALL specified tags)
         RESULT=$(sqlite3 "$DB_PATH" "
             SELECT t.thread_id, t.summary, t.resolved, GROUP_CONCAT(g.label) as tags
@@ -527,7 +527,7 @@ list_threads() {
             ORDER BY t.thread_id DESC
             $LIMIT_CLAUSE;
         ")
-        
+
         if [ -z "$RESULT" ]; then
             echo "No threads found with tag '$TAG_FILTER'"
             exit 0
@@ -555,7 +555,7 @@ list_threads() {
         echo "All Threads:"
         echo "============"
     fi
-    
+
     echo "$RESULT" | while IFS='|' read -r thread_id summary resolved tags; do
         echo "[$thread_id] $summary (resolved: $resolved)"
         if [ -n "$tags" ]; then
@@ -585,7 +585,7 @@ add_artifact() {
 
     # Get filename from path and escape single quotes for SQL
     FILENAME=$(basename "$FILE_PATH" | sed "s/'/''/g")
-    
+
     # Read file content and escape single quotes for SQL
     CONTENT=$(cat "$FILE_PATH" | sed "s/'/''/g")
 
@@ -596,20 +596,20 @@ add_artifact() {
 
     # Process tags if provided
     if [ -n "$TAGS" ]; then
-        IFS=',' read -ra TAG_ARRAY <<< "$TAGS"
+        IFS=',' read -ra TAG_ARRAY <<<"$TAGS"
         for tag in "${TAG_ARRAY[@]}"; do
             # Trim whitespace
             tag=$(echo "$tag" | xargs)
-            
+
             # Escape single quotes in tag
             tag_escaped=$(echo "$tag" | sed "s/'/''/g")
-            
+
             # Insert tag if it doesn't exist, get its ID
             TAG_ID=$(sqlite3 "$DB_PATH" "
                 INSERT OR IGNORE INTO tags (label) VALUES ('$tag_escaped');
                 SELECT id FROM tags WHERE label = '$tag_escaped';
             ")
-            
+
             # Link artifact to tag
             sqlite3 "$DB_PATH" "INSERT OR IGNORE INTO artifact_tags (artifact_id, tag_id) VALUES ($ARTIFACT_ID, $TAG_ID);"
             echo "  Tagged with: $tag"
@@ -702,7 +702,7 @@ list_artifacts() {
     SHOW_ALL=false
     COUNT=""
     TAG_FILTER=""
-    
+
     while [ $# -gt 0 ]; do
         case "$1" in
             "--all")
@@ -726,23 +726,23 @@ list_artifacts() {
                 ;;
         esac
     done
-    
+
     # Set default limit if neither --all nor --count specified
     if [ "$SHOW_ALL" = false ] && [ -z "$COUNT" ]; then
         COUNT="5"
     fi
-    
+
     # Build LIMIT clause
     LIMIT_CLAUSE=""
     if [ "$SHOW_ALL" = false ] && [ -n "$COUNT" ]; then
         LIMIT_CLAUSE="LIMIT $COUNT"
     fi
-    
+
     if [ -n "$TAG_FILTER" ]; then
         # Parse multiple tags separated by commas
-        IFS=',' read -ra FILTER_TAGS <<< "$TAG_FILTER"
+        IFS=',' read -ra FILTER_TAGS <<<"$TAG_FILTER"
         TAG_COUNT=${#FILTER_TAGS[@]}
-        
+
         # Build WHERE conditions for multiple tags (AND logic)
         TAG_CONDITIONS=""
         for i in "${!FILTER_TAGS[@]}"; do
@@ -752,7 +752,7 @@ list_artifacts() {
             fi
             TAG_CONDITIONS="${TAG_CONDITIONS}a.id IN (SELECT at${i}.artifact_id FROM artifact_tags at${i} JOIN tags g${i} ON at${i}.tag_id = g${i}.id WHERE g${i}.label = '$tag')"
         done
-        
+
         # Get artifacts filtered by multiple tags (must have ALL specified tags)
         RESULT=$(sqlite3 "$DB_PATH" "
             SELECT a.id, a.filename, a.summary, GROUP_CONCAT(g.label) as tags, a.created_at
@@ -764,7 +764,7 @@ list_artifacts() {
             ORDER BY a.created_at DESC
             $LIMIT_CLAUSE;
         ")
-        
+
         if [ -z "$RESULT" ]; then
             echo "No artifacts found with tag '$TAG_FILTER'"
             exit 0
@@ -792,7 +792,7 @@ list_artifacts() {
         echo "All Artifacts:"
         echo "=============="
     fi
-    
+
     echo "$RESULT" | while IFS='|' read -r id filename summary tags created_at; do
         echo "[#$id] $filename"
         if [ -n "$summary" ] && [ "$summary" != "" ]; then
@@ -826,7 +826,7 @@ add_prompt() {
 
     # Get filename from path and escape single quotes for SQL
     PROMPT_NAME=$(basename "$FILE_PATH" | sed "s/'/''/g")
-    
+
     # Read file content and escape single quotes for SQL
     PROMPT_CONTENT=$(cat "$FILE_PATH" | sed "s/'/''/g")
 
@@ -837,20 +837,20 @@ add_prompt() {
 
     # Process tags if provided
     if [ -n "$TAGS" ]; then
-        IFS=',' read -ra TAG_ARRAY <<< "$TAGS"
+        IFS=',' read -ra TAG_ARRAY <<<"$TAGS"
         for tag in "${TAG_ARRAY[@]}"; do
             # Trim whitespace
             tag=$(echo "$tag" | xargs)
-            
+
             # Escape single quotes in tag
             tag_escaped=$(echo "$tag" | sed "s/'/''/g")
-            
+
             # Insert tag if it doesn't exist, get its ID
             TAG_ID=$(sqlite3 "$DB_PATH" "
                 INSERT OR IGNORE INTO tags (label) VALUES ('$tag_escaped');
                 SELECT id FROM tags WHERE label = '$tag_escaped';
             ")
-            
+
             # Link prompt to tag
             sqlite3 "$DB_PATH" "INSERT OR IGNORE INTO prompt_tags (prompt_id, tag_id) VALUES ($PROMPT_ID, $TAG_ID);"
             echo "  Tagged with: $tag"
@@ -903,7 +903,7 @@ list_prompts() {
     SHOW_ALL=false
     COUNT=""
     TAG_FILTER=""
-    
+
     while [ $# -gt 0 ]; do
         case "$1" in
             "--all")
@@ -927,23 +927,23 @@ list_prompts() {
                 ;;
         esac
     done
-    
+
     # Set default limit if neither --all nor --count specified
     if [ "$SHOW_ALL" = false ] && [ -z "$COUNT" ]; then
         COUNT="5"
     fi
-    
+
     # Build LIMIT clause
     LIMIT_CLAUSE=""
     if [ "$SHOW_ALL" = false ] && [ -n "$COUNT" ]; then
         LIMIT_CLAUSE="LIMIT $COUNT"
     fi
-    
+
     if [ -n "$TAG_FILTER" ]; then
         # Parse multiple tags separated by commas
-        IFS=',' read -ra FILTER_TAGS <<< "$TAG_FILTER"
+        IFS=',' read -ra FILTER_TAGS <<<"$TAG_FILTER"
         TAG_COUNT=${#FILTER_TAGS[@]}
-        
+
         # Build WHERE conditions for multiple tags (AND logic)
         TAG_CONDITIONS=""
         for i in "${!FILTER_TAGS[@]}"; do
@@ -953,7 +953,7 @@ list_prompts() {
             fi
             TAG_CONDITIONS="${TAG_CONDITIONS}p.id IN (SELECT pt${i}.prompt_id FROM prompt_tags pt${i} JOIN tags g${i} ON pt${i}.tag_id = g${i}.id WHERE g${i}.label = '$tag')"
         done
-        
+
         # Get prompts filtered by multiple tags (must have ALL specified tags)
         RESULT=$(sqlite3 "$DB_PATH" "
             SELECT p.id, p.name, p.description, GROUP_CONCAT(g.label) as tags, p.created_at
@@ -965,7 +965,7 @@ list_prompts() {
             ORDER BY p.created_at DESC
             $LIMIT_CLAUSE;
         ")
-        
+
         if [ -z "$RESULT" ]; then
             echo "No prompts found with tag '$TAG_FILTER'"
             exit 0
@@ -993,7 +993,7 @@ list_prompts() {
         echo "All Prompts:"
         echo "==========="
     fi
-    
+
     echo "$RESULT" | while IFS='|' read -r id name description tags created_at; do
         echo "[#$id] $name"
         if [ -n "$description" ] && [ "$description" != "" ]; then
@@ -1085,7 +1085,7 @@ delete_prompt() {
 
     # Delete the prompt (CASCADE will handle related records)
     sqlite3 "$DB_PATH" "DELETE FROM prompts WHERE id = $PROMPT_ID;"
-    
+
     echo "Deleted prompt #$PROMPT_ID: $PROMPT_NAME"
 }
 
@@ -1238,20 +1238,20 @@ tag_entity() {
     echo "Adding tags to $ENTITY_TYPE $ENTITY_ID:"
 
     # Process tags
-    IFS=',' read -ra TAG_ARRAY <<< "$TAGS"
+    IFS=',' read -ra TAG_ARRAY <<<"$TAGS"
     for tag in "${TAG_ARRAY[@]}"; do
         # Trim whitespace
         tag=$(echo "$tag" | xargs)
-        
+
         # Escape single quotes in tag
         tag_escaped=$(echo "$tag" | sed "s/'/''/g")
-        
+
         # Insert tag if it doesn't exist, get its ID
         TAG_ID=$(sqlite3 "$DB_PATH" "
             INSERT OR IGNORE INTO tags (label) VALUES ('$tag_escaped');
             SELECT id FROM tags WHERE label = '$tag_escaped';
         ")
-        
+
         # Link entity to tag based on type
         if [ "$ENTITY_TYPE" = "thread" ]; then
             # Thread IDs are text, need quotes
@@ -1260,13 +1260,13 @@ tag_entity() {
             # Task, artifact, and prompt IDs are integers, no quotes
             sqlite3 "$DB_PATH" "INSERT OR IGNORE INTO $JUNCTION_TABLE ($FOREIGN_KEY, tag_id) VALUES ($ENTITY_ID, $TAG_ID);"
         fi
-        
+
         echo "  Tagged with: $tag"
     done
 }
 
 tool_overview() {
-    cat << 'EOF'
+    cat <<'EOF'
 WF TOOL OVERVIEW FOR AGENTIC CODING
 
 Purpose: Track work across coding sessions, maintain AI conversation context, store development artifacts and reusable prompts with flexible tagging and linking.
@@ -1350,31 +1350,31 @@ EOF
 COMMAND="$1"
 if [ $# -ge 2 ]; then
     case "$1 $2" in
-        "list tasks"|"list threads"|"list artifacts"|"list prompts")
+        "list tasks" | "list threads" | "list artifacts" | "list prompts")
             COMMAND="$1-$2"
             shift
             ;;
-        "add thread"|"add artifact"|"add prompt")
+        "add thread" | "add artifact" | "add prompt")
             COMMAND="$1-$2"
             shift
             ;;
-        "show thread"|"show prompt")
+        "show thread" | "show prompt")
             COMMAND="$1-$2"
             shift
             ;;
-        "link artifact"|"link prompt")
+        "link artifact" | "link prompt")
             COMMAND="$1-$2"
             shift
             ;;
-        "summarize artifact"|"summarize prompt")
+        "summarize artifact" | "summarize prompt")
             COMMAND="$1-$2"
             shift
             ;;
-        "dump artifact"|"dump prompt")
+        "dump artifact" | "dump prompt")
             COMMAND="$1-$2"
             shift
             ;;
-        "update prompt"|"delete prompt")
+        "update prompt" | "delete prompt")
             COMMAND="$1-$2"
             shift
             ;;
