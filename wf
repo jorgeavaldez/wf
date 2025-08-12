@@ -566,7 +566,7 @@ summarize_artifact() {
     echo "Generating summary for artifact #$ARTIFACT_ID..."
 
     # Generate summary using claude CLI
-    SUMMARY=$(echo "$CONTENT" | claude "Provide exactly one title sentence or phrase that summarizes this markdown content:")
+    SUMMARY=$(echo "$CONTENT" | claude -p "Provide exactly one title sentence or phrase that summarizes this markdown content:")
 
     if [ $? -eq 0 ]; then
         # Update the summary field
@@ -913,12 +913,13 @@ summarize_prompt() {
     echo "Generating summary for prompt #$PROMPT_ID..."
 
     # Generate summary using claude CLI
-    SUMMARY=$(echo "$CONTENT" | claude "Provide exactly one title sentence or phrase that summarizes this prompt content:")
+    SUMMARY=$(echo "$CONTENT" | claude -p "Provide exactly one title sentence or phrase that summarizes this markdown content:")
 
     if [ $? -eq 0 ]; then
         # Update the description field with the summary
-        SUMMARY_ESCAPED=$(echo "$SUMMARY" | sed "s/'/''/g")
-        sqlite3 "$DB_PATH" "UPDATE prompts SET description = '$SUMMARY_ESCAPED', updated_at = CURRENT_TIMESTAMP WHERE id = $PROMPT_ID;"
+        # SUMMARY_ESCAPED=$(echo "$SUMMARY" | sed "s/'/''/g")
+        # sqlite3 "$DB_PATH" "UPDATE prompts SET description = '$SUMMARY_ESCAPED', updated_at = CURRENT_TIMESTAMP WHERE id = $PROMPT_ID;"
+        sqlite3 "$DB_PATH" "UPDATE prompts SET description = '$SUMMARY', updated_at = CURRENT_TIMESTAMP WHERE id = $PROMPT_ID;"
         echo "Summary updated for prompt #$PROMPT_ID"
         echo "Summary: $SUMMARY"
     else
