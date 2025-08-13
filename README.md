@@ -32,7 +32,7 @@ wf add artifact "solution.md" implementation,fix
 
 ```bash
 # Track work
-wf add "Fix the bug" urgent,backend
+wf add task "Fix the bug" urgent,backend
 
 # Log AI conversations  
 wf add thread "conv123" "Discussed the fix" false bug

@@ -5,8 +5,8 @@ DB_PATH="${WF_DB_PATH:-/wf.db}"
 show_help() {
     echo "wf - Workflow Manager CLI"
     echo "Usage:"
-    echo "  $0 add \"task description\" [tag1,tag2,tag3...]"
-    echo "  $0 show <task_id>"
+    echo "  $0 add task \"task description\" [tag1,tag2,tag3...]"
+    echo "  $0 dump task <task_id>"
     echo "  $0 list tasks [--all] [--count N] [tag]"
     echo "  $0 add thread <thread_id> \"summary\" [resolved] [tag1,tag2,tag3...]"
     echo "  $0 show thread <thread_id>"
@@ -29,8 +29,8 @@ show_help() {
     echo "  $0 init <db_path>"
     echo ""
     echo "Examples:"
-    echo "  $0 add \"Fix login bug\" urgent,frontend"
-    echo "  $0 show 1"
+    echo "  $0 add task \"Fix login bug\" urgent,frontend"
+    echo "  $0 dump task 1"
     echo "  $0 list tasks"
     echo "  $0 list tasks urgent"
     echo "  $0 add thread \"abc123\" \"Login discussion\" false bug,discussion"
@@ -282,7 +282,7 @@ add_thread() {
     fi
 }
 
-show_task() {
+dump_task() {
     if [ $# -eq 0 ]; then
         echo "Error: Task ID required"
         show_help
@@ -1272,14 +1272,14 @@ WF TOOL OVERVIEW FOR AGENTIC CODING
 Purpose: Track work across coding sessions, maintain AI conversation context, store development artifacts and reusable prompts with flexible tagging and linking.
 
 CORE ENTITIES:
-1. Tasks - Work items/backlog: wf add "description" tags | wf list tasks [tag] | wf show <id>
+1. Tasks - Work items/backlog: wf add task "description" [tags] | wf list tasks [tag] | wf dump task <id>
 2. Threads - AI conversations: wf add thread "id" "summary" [resolved] [tags] | wf list threads [tag]
 3. Artifacts - Documents/code: wf add artifact "file.md" [tags] | wf dump artifact <id> | wf summarize artifact <id>
 4. Prompts - Reusable AI prompts: wf add prompt "file.md" [tags] | wf summarize prompt <id> | wf list prompts [tag]
 5. Tags - Auto-created labels for filtering: urgent,backend,bug,resolved,project-a
 
 KEY COMMANDS:
-wf add "Fix login" urgent,backend
+wf add task "Fix login" urgent,backend
 wf add thread "conv123" "Fixed OAuth bug" true bug,resolved  
 wf add artifact "design.md" architecture,planning
 wf add prompt "code-review.md" security,review
@@ -1296,14 +1296,14 @@ wf update prompt 1 --content "New prompt text"
 
 WORKFLOW PATTERNS:
 Feature Development:
-- wf add "New feature" feature,high
+- wf add task "New feature" feature,high
 - wf add artifact "design.md" feature,planning
 - wf add prompt "feature-review.md" feature,review
 - wf add thread "conv456" "Discussed implementation" false feature
 - wf link artifact 1 task 1; wf link prompt 1 task 1; wf link artifact 1 thread "conv456"
 
 Bug Tracking:
-- wf add "Session timeout bug" bug,urgent
+- wf add task "Session timeout bug" bug,urgent
 - wf add thread "debug789" "Found config issue" true bug,resolved
 - wf add artifact "fix.md" bug,solution
 - wf add prompt "bug-analysis.md" debugging,analysis
@@ -1354,11 +1354,11 @@ if [ $# -ge 2 ]; then
             COMMAND="$1-$2"
             shift
             ;;
-        "add thread" | "add artifact" | "add prompt")
+        "add task" | "add thread" | "add artifact" | "add prompt")
             COMMAND="$1-$2"
             shift
             ;;
-        "show thread" | "show prompt")
+        "dump task" | "show thread" | "show prompt")
             COMMAND="$1-$2"
             shift
             ;;
@@ -1387,13 +1387,13 @@ fi
 
 # Main command dispatch
 case "$COMMAND" in
-    "add")
+    "add-task")
         shift
         add_task "$@"
         ;;
-    "show")
+    "dump-task")
         shift
-        show_task "$@"
+        dump_task "$@"
         ;;
     "list-tasks")
         shift
