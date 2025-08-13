@@ -16,6 +16,7 @@ show_help() {
     echo "  $0 link artifact <artifact_id> thread <thread_id>"
     echo "  $0 summarize artifact <artifact_id>"
     echo "  $0 dump artifact <artifact_id>"
+    echo "  $0 delete artifact <artifact_id>"
     echo "  $0 list artifacts [--all] [--count N] [tag]"
     echo "  $0 add prompt <file_path> [tag1,tag2,tag3...]"
     echo "  $0 show prompt <prompt_id>"
@@ -43,6 +44,7 @@ show_help() {
     echo "  $0 link artifact 1 thread \"abc123\""
     echo "  $0 summarize artifact 1"
     echo "  $0 dump artifact 1"
+    echo "  $0 delete artifact 1"
     echo "  $0 list artifacts"
     echo "  $0 list artifacts documentation"
     echo "  $0 add prompt \"prompt.md\" security,review"
@@ -724,6 +726,31 @@ dump_artifact() {
     echo "$CONTENT"
 }
 
+delete_artifact() {
+    if [ $# -eq 0 ]; then
+        echo "Error: Artifact ID required"
+        show_help
+        exit 1
+    fi
+
+    ARTIFACT_ID="$1"
+
+    # Check if artifact exists
+    ARTIFACT_EXISTS=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM artifacts WHERE id = $ARTIFACT_ID;")
+    if [ "$ARTIFACT_EXISTS" -eq 0 ]; then
+        echo "Error: Artifact #$ARTIFACT_ID not found"
+        exit 1
+    fi
+
+    # Get artifact filename for confirmation
+    ARTIFACT_FILENAME=$(sqlite3 "$DB_PATH" "SELECT filename FROM artifacts WHERE id = $ARTIFACT_ID;")
+
+    # Delete the artifact (CASCADE will handle related records)
+    sqlite3 "$DB_PATH" "DELETE FROM artifacts WHERE id = $ARTIFACT_ID;"
+
+    echo "Deleted artifact #$ARTIFACT_ID: $ARTIFACT_FILENAME"
+}
+
 list_artifacts() {
     # Parse arguments
     SHOW_ALL=false
@@ -1401,6 +1428,10 @@ if [ $# -ge 2 ]; then
             COMMAND="$1-$2"
             shift
             ;;
+        "delete artifact")
+            COMMAND="$1-$2"
+            shift
+            ;;
         "update prompt" | "delete prompt" | "delete task")
             COMMAND="$1-$2"
             shift
@@ -1457,6 +1488,10 @@ case "$COMMAND" in
     "dump-artifact")
         shift
         dump_artifact "$@"
+        ;;
+    "delete-artifact")
+        shift
+        delete_artifact "$@"
         ;;
     "list-artifacts")
         shift
