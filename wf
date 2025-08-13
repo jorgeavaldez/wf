@@ -956,7 +956,7 @@ list_prompts() {
 
         # Get prompts filtered by multiple tags (must have ALL specified tags)
         RESULT=$(sqlite3 "$DB_PATH" "
-            SELECT p.id, p.name, p.description, GROUP_CONCAT(g.label) as tags, p.created_at
+            SELECT p.id, p.name, SUBSTR(p.description, 1, INSTR(p.description || char(10), char(10)) - 1) as description, GROUP_CONCAT(g.label) as tags, p.created_at
             FROM prompts p
             LEFT JOIN prompt_tags pt ON p.id = pt.prompt_id
             LEFT JOIN tags g ON pt.tag_id = g.id
@@ -976,7 +976,7 @@ list_prompts() {
     else
         # Get all prompts with tags
         RESULT=$(sqlite3 "$DB_PATH" "
-            SELECT p.id, p.name, p.description, GROUP_CONCAT(g.label) as tags, p.created_at
+            SELECT p.id, p.name, SUBSTR(p.description, 1, INSTR(p.description || char(10), char(10)) - 1) as description, GROUP_CONCAT(g.label) as tags, p.created_at
             FROM prompts p
             LEFT JOIN prompt_tags pt ON p.id = pt.prompt_id
             LEFT JOIN tags g ON pt.tag_id = g.id
@@ -999,7 +999,7 @@ list_prompts() {
         if [ -n "$description" ] && [ "$description" != "" ]; then
             echo "  Description: $description"
         fi
-        if [ -n "$tags" ]; then
+        if [ -n "$tags" ] && [ "$tags" != "" ]; then
             echo "  Tags: $tags"
         else
             echo "  Tags: none"
