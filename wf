@@ -645,18 +645,27 @@ add_artifact() {
     if [ "$SUMMARIZE" = true ]; then
         echo "Generating summary for artifact #$ARTIFACT_ID..."
 
-        # Generate summary using claude CLI
-        SUMMARY=$(echo "$CONTENT" | sed "s/''/'/g" | claude -p "Provide exactly one title sentence or phrase that summarizes this markdown content:")
+        # Generate summary using claude CLI with retry logic
+        for attempt in 1 2; do
+            SUMMARY=$(echo "$CONTENT" | sed "s/''/'/g" | claude -p "Provide exactly one title sentence or phrase that summarizes this markdown content:")
 
-        if [ $? -eq 0 ]; then
-            # Escape single quotes for SQL
-            SUMMARY_ESCAPED=$(echo "$SUMMARY" | sed "s/'/''/g")
-            # Update the summary field
-            sqlite3 "$DB_PATH" "UPDATE artifacts SET summary = '$SUMMARY_ESCAPED' WHERE id = $ARTIFACT_ID;"
-            echo "  Summary: $SUMMARY"
-        else
-            echo "  Warning: Failed to generate summary using claude CLI"
-        fi
+            if [ $? -eq 0 ] && validate_single_line_summary "$SUMMARY"; then
+                # Escape single quotes for SQL
+                SUMMARY_ESCAPED=$(echo "$SUMMARY" | sed "s/'/''/g")
+                # Update the summary field
+                sqlite3 "$DB_PATH" "UPDATE artifacts SET summary = '$SUMMARY_ESCAPED' WHERE id = $ARTIFACT_ID;"
+                echo "  Summary: $SUMMARY"
+                break
+            elif [ $? -eq 0 ]; then
+                echo "  Warning: Summary attempt $attempt produced multiple lines, retrying..."
+            else
+                echo "  Warning: Claude CLI failed on attempt $attempt"
+            fi
+
+            if [ $attempt -eq 2 ]; then
+                echo "  Warning: Failed to generate valid single-line summary after 2 attempts"
+            fi
+        done
     fi
 
     # Process tags if provided
@@ -728,18 +737,27 @@ summarize_artifact() {
 
     echo "Generating summary for artifact #$ARTIFACT_ID..."
 
-    # Generate summary using claude CLI
-    SUMMARY=$(echo "$CONTENT" | claude -p "Provide exactly one title sentence or phrase that summarizes this markdown content:")
+    # Generate summary using claude CLI with retry logic
+    for attempt in 1 2; do
+        SUMMARY=$(echo "$CONTENT" | claude -p "Provide exactly one title sentence or phrase that summarizes this markdown content:")
 
-    if [ $? -eq 0 ]; then
-        # Update the summary field
-        sqlite3 "$DB_PATH" "UPDATE artifacts SET summary = '$SUMMARY' WHERE id = $ARTIFACT_ID;"
-        echo "Summary updated for artifact #$ARTIFACT_ID"
-        echo "Summary: $SUMMARY"
-    else
-        echo "Error: Failed to generate summary using claude CLI"
-        exit 1
-    fi
+        if [ $? -eq 0 ] && validate_single_line_summary "$SUMMARY"; then
+            # Escape single quotes for SQL
+            SUMMARY_ESCAPED=$(echo "$SUMMARY" | sed "s/'/''/g")
+            # Update the summary field
+            sqlite3 "$DB_PATH" "UPDATE artifacts SET summary = '$SUMMARY_ESCAPED' WHERE id = $ARTIFACT_ID;"
+            echo "Summary updated for artifact #$ARTIFACT_ID"
+            echo "Summary: $SUMMARY"
+            return 0
+        elif [ $? -eq 0 ]; then
+            echo "Warning: Summary attempt $attempt produced multiple lines, retrying..."
+        else
+            echo "Warning: Claude CLI failed on attempt $attempt"
+        fi
+    done
+
+    echo "Error: Failed to generate valid single-line summary after 2 attempts"
+    exit 1
 }
 
 dump_artifact() {
@@ -947,18 +965,27 @@ add_prompt() {
     if [ "$SUMMARIZE" = true ]; then
         echo "Generating summary for prompt #$PROMPT_ID..."
 
-        # Generate summary using claude CLI
-        SUMMARY=$(echo "$PROMPT_CONTENT" | sed "s/''/'/g" | claude -p "I have given you a prompt I wrote for another agent as markdown. Provide exactly one title sentence or phrase that summarizes this markdown content:")
+        # Generate summary using claude CLI with retry logic
+        for attempt in 1 2; do
+            SUMMARY=$(echo "$PROMPT_CONTENT" | sed "s/''/'/g" | claude -p "I have given you a prompt I wrote for another agent as markdown. Provide exactly one title sentence or phrase that summarizes this markdown content:")
 
-        if [ $? -eq 0 ]; then
-            # Escape single quotes for SQL
-            SUMMARY_ESCAPED=$(echo "$SUMMARY" | sed "s/'/''/g")
-            # Update the description field with the summary
-            sqlite3 "$DB_PATH" "UPDATE prompts SET description = '$SUMMARY_ESCAPED', updated_at = CURRENT_TIMESTAMP WHERE id = $PROMPT_ID;"
-            echo "  Summary: $SUMMARY"
-        else
-            echo "  Warning: Failed to generate summary using claude CLI"
-        fi
+            if [ $? -eq 0 ] && validate_single_line_summary "$SUMMARY"; then
+                # Escape single quotes for SQL
+                SUMMARY_ESCAPED=$(echo "$SUMMARY" | sed "s/'/''/g")
+                # Update the description field with the summary
+                sqlite3 "$DB_PATH" "UPDATE prompts SET description = '$SUMMARY_ESCAPED', updated_at = CURRENT_TIMESTAMP WHERE id = $PROMPT_ID;"
+                echo "  Summary: $SUMMARY"
+                break
+            elif [ $? -eq 0 ]; then
+                echo "  Warning: Summary attempt $attempt produced multiple lines, retrying..."
+            else
+                echo "  Warning: Claude CLI failed on attempt $attempt"
+            fi
+
+            if [ $attempt -eq 2 ]; then
+                echo "  Warning: Failed to generate valid single-line summary after 2 attempts"
+            fi
+        done
     fi
 
     # Process tags if provided
@@ -1234,19 +1261,27 @@ summarize_prompt() {
 
     echo "Generating summary for prompt #$PROMPT_ID..."
 
-    # Generate summary using claude CLI
-    SUMMARY=$(echo "$CONTENT" | claude -p "I have given you a prompt I wrote for another agent as markdown. Provide exactly one title sentence or phrase that summarizes this markdown content:")
+    # Generate summary using claude CLI with retry logic
+    for attempt in 1 2; do
+        SUMMARY=$(echo "$CONTENT" | claude -p "I have given you a prompt I wrote for another agent as markdown. Provide exactly one title sentence or phrase that summarizes this markdown content:")
 
-    if [ $? -eq 0 ]; then
-        # Update the description field with the summary
-        SUMMARY_ESCAPED=$(echo "$SUMMARY" | sed "s/'/''/g")
-        sqlite3 "$DB_PATH" "UPDATE prompts SET description = '$SUMMARY_ESCAPED', updated_at = CURRENT_TIMESTAMP WHERE id = $PROMPT_ID;"
-        echo "Summary updated for prompt #$PROMPT_ID"
-        echo "Summary: $SUMMARY"
-    else
-        echo "Error: Failed to generate summary using claude CLI"
-        exit 1
-    fi
+        if [ $? -eq 0 ] && validate_single_line_summary "$SUMMARY"; then
+            # Escape single quotes for SQL
+            SUMMARY_ESCAPED=$(echo "$SUMMARY" | sed "s/'/''/g")
+            # Update the description field with the summary
+            sqlite3 "$DB_PATH" "UPDATE prompts SET description = '$SUMMARY_ESCAPED', updated_at = CURRENT_TIMESTAMP WHERE id = $PROMPT_ID;"
+            echo "Summary updated for prompt #$PROMPT_ID"
+            echo "Summary: $SUMMARY"
+            return 0
+        elif [ $? -eq 0 ]; then
+            echo "Warning: Summary attempt $attempt produced multiple lines, retrying..."
+        else
+            echo "Warning: Claude CLI failed on attempt $attempt"
+        fi
+    done
+
+    echo "Error: Failed to generate valid single-line summary after 2 attempts"
+    exit 1
 }
 
 dump_prompt() {
@@ -1298,6 +1333,22 @@ link_prompt() {
             exit 1
             ;;
     esac
+}
+
+validate_single_line_summary() {
+    local summary="$1"
+    local line_count=$(echo "$summary" | wc -l | xargs)
+
+    if [ "$line_count" -ne 1 ]; then
+        return 1
+    fi
+
+    # Additional check for empty lines or lines with only whitespace
+    if [ -z "$(echo "$summary" | xargs)" ]; then
+        return 1
+    fi
+
+    return 0
 }
 
 tag_entity() {
