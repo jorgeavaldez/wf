@@ -12,13 +12,13 @@ show_help() {
     echo "  $0 add thread <thread_id> \"summary\" [resolved] [tag1,tag2,tag3...]"
     echo "  $0 show thread <thread_id>"
     echo "  $0 list threads [--all] [--count N] [tag]"
-    echo "  $0 add artifact <file_path> [tag1,tag2,tag3...]"
+    echo "  $0 add artifact <file_path> [--summarize] [tag1,tag2,tag3...]"
     echo "  $0 link artifact <artifact_id> thread <thread_id>"
     echo "  $0 summarize artifact <artifact_id>"
     echo "  $0 dump artifact <artifact_id>"
     echo "  $0 delete artifact <artifact_id>"
     echo "  $0 list artifacts [--all] [--count N] [tag]"
-    echo "  $0 add prompt <file_path> [tag1,tag2,tag3...]"
+    echo "  $0 add prompt <file_path> [--summarize] [tag1,tag2,tag3...]"
     echo "  $0 show prompt <prompt_id>"
     echo "  $0 list prompts [--all] [--count N] [tag]"
     echo "  $0 update prompt <prompt_id> --name \"new name\" --content \"new content\" --description \"new desc\""
@@ -40,14 +40,14 @@ show_help() {
     echo "  $0 show thread \"abc123\""
     echo "  $0 list threads"
     echo "  $0 list threads bug"
-    echo "  $0 add artifact \"plan.md\" documentation,planning"
+    echo "  $0 add artifact \"plan.md\" --summarize documentation,planning"
     echo "  $0 link artifact 1 thread \"abc123\""
     echo "  $0 summarize artifact 1"
     echo "  $0 dump artifact 1"
     echo "  $0 delete artifact 1"
     echo "  $0 list artifacts"
     echo "  $0 list artifacts documentation"
-    echo "  $0 add prompt \"prompt.md\" security,review"
+    echo "  $0 add prompt \"prompt.md\" --summarize security,review"
     echo "  $0 show prompt 1"
     echo "  $0 list prompts security"
     echo "  $0 update prompt 1 --content \"Please review this code for security and performance\""
@@ -604,7 +604,25 @@ add_artifact() {
     fi
 
     FILE_PATH="$1"
-    TAGS="$2"
+    TAGS=""
+    SUMMARIZE=false
+
+    # Parse arguments to handle --summarize flag
+    shift
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            "--summarize")
+                SUMMARIZE=true
+                shift
+                ;;
+            *)
+                if [ -z "$TAGS" ]; then
+                    TAGS="$1"
+                fi
+                shift
+                ;;
+        esac
+    done
 
     # Check if file exists
     if [ ! -f "$FILE_PATH" ]; then
@@ -622,6 +640,24 @@ add_artifact() {
     ARTIFACT_ID=$(sqlite3 "$DB_PATH" "INSERT INTO artifacts (filename, content) VALUES ('$FILENAME', '$CONTENT'); SELECT last_insert_rowid();")
 
     echo "Added artifact #$ARTIFACT_ID: $FILENAME"
+
+    # Auto-summarize if flag is set
+    if [ "$SUMMARIZE" = true ]; then
+        echo "Generating summary for artifact #$ARTIFACT_ID..."
+
+        # Generate summary using claude CLI
+        SUMMARY=$(echo "$CONTENT" | sed "s/''/'/g" | claude -p "Provide exactly one title sentence or phrase that summarizes this markdown content:")
+
+        if [ $? -eq 0 ]; then
+            # Escape single quotes for SQL
+            SUMMARY_ESCAPED=$(echo "$SUMMARY" | sed "s/'/''/g")
+            # Update the summary field
+            sqlite3 "$DB_PATH" "UPDATE artifacts SET summary = '$SUMMARY_ESCAPED' WHERE id = $ARTIFACT_ID;"
+            echo "  Summary: $SUMMARY"
+        else
+            echo "  Warning: Failed to generate summary using claude CLI"
+        fi
+    fi
 
     # Process tags if provided
     if [ -n "$TAGS" ]; then
@@ -870,7 +906,25 @@ add_prompt() {
     fi
 
     FILE_PATH="$1"
-    TAGS="$2"
+    TAGS=""
+    SUMMARIZE=false
+
+    # Parse arguments to handle --summarize flag
+    shift
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            "--summarize")
+                SUMMARIZE=true
+                shift
+                ;;
+            *)
+                if [ -z "$TAGS" ]; then
+                    TAGS="$1"
+                fi
+                shift
+                ;;
+        esac
+    done
 
     # Check if file exists
     if [ ! -f "$FILE_PATH" ]; then
@@ -888,6 +942,24 @@ add_prompt() {
     PROMPT_ID=$(sqlite3 "$DB_PATH" "INSERT INTO prompts (name, content) VALUES ('$PROMPT_NAME', '$PROMPT_CONTENT'); SELECT last_insert_rowid();")
 
     echo "Added prompt #$PROMPT_ID: $PROMPT_NAME"
+
+    # Auto-summarize if flag is set
+    if [ "$SUMMARIZE" = true ]; then
+        echo "Generating summary for prompt #$PROMPT_ID..."
+
+        # Generate summary using claude CLI
+        SUMMARY=$(echo "$PROMPT_CONTENT" | sed "s/''/'/g" | claude -p "I have given you a prompt I wrote for another agent as markdown. Provide exactly one title sentence or phrase that summarizes this markdown content:")
+
+        if [ $? -eq 0 ]; then
+            # Escape single quotes for SQL
+            SUMMARY_ESCAPED=$(echo "$SUMMARY" | sed "s/'/''/g")
+            # Update the description field with the summary
+            sqlite3 "$DB_PATH" "UPDATE prompts SET description = '$SUMMARY_ESCAPED', updated_at = CURRENT_TIMESTAMP WHERE id = $PROMPT_ID;"
+            echo "  Summary: $SUMMARY"
+        else
+            echo "  Warning: Failed to generate summary using claude CLI"
+        fi
+    fi
 
     # Process tags if provided
     if [ -n "$TAGS" ]; then
