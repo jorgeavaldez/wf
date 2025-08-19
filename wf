@@ -224,8 +224,11 @@ add_task() {
     TASK_NOTE="$1"
     TAGS="$2"
 
+    # Escape single quotes for SQL
+    TASK_NOTE_ESCAPED=$(echo "$TASK_NOTE" | sed "s/'/''/g")
+
     # Insert the task and get its ID
-    TASK_ID=$(sqlite3 "$DB_PATH" "INSERT INTO tasks (note) VALUES ('$TASK_NOTE'); SELECT last_insert_rowid();")
+    TASK_ID=$(sqlite3 "$DB_PATH" "INSERT INTO tasks (note) VALUES ('$TASK_NOTE_ESCAPED'); SELECT last_insert_rowid();")
 
     echo "Added task #$TASK_ID: $TASK_NOTE"
 
@@ -236,10 +239,13 @@ add_task() {
             # Trim whitespace
             tag=$(echo "$tag" | xargs)
 
+            # Escape single quotes in tag
+            tag_escaped=$(echo "$tag" | sed "s/'/''/g")
+
             # Insert tag if it doesn't exist, get its ID
             TAG_ID=$(sqlite3 "$DB_PATH" "
-                INSERT OR IGNORE INTO tags (label) VALUES ('$tag');
-                SELECT id FROM tags WHERE label = '$tag';
+                INSERT OR IGNORE INTO tags (label) VALUES ('$tag_escaped');
+                SELECT id FROM tags WHERE label = '$tag_escaped';
             ")
 
             # Link task to tag
@@ -286,8 +292,12 @@ add_thread() {
     RESOLVED="${3:-false}"
     TAGS="$4"
 
+    # Escape single quotes for SQL
+    THREAD_ID_ESCAPED=$(echo "$THREAD_ID" | sed "s/'/''/g")
+    SUMMARY_ESCAPED=$(echo "$SUMMARY" | sed "s/'/''/g")
+
     # Insert the thread
-    sqlite3 "$DB_PATH" "INSERT OR REPLACE INTO amp_threads (thread_id, summary, resolved) VALUES ('$THREAD_ID', '$SUMMARY', $RESOLVED);"
+    sqlite3 "$DB_PATH" "INSERT OR REPLACE INTO amp_threads (thread_id, summary, resolved) VALUES ('$THREAD_ID_ESCAPED', '$SUMMARY_ESCAPED', $RESOLVED);"
 
     echo "Added thread $THREAD_ID: $SUMMARY (resolved: $RESOLVED)"
 
@@ -298,14 +308,17 @@ add_thread() {
             # Trim whitespace
             tag=$(echo "$tag" | xargs)
 
+            # Escape single quotes in tag
+            tag_escaped=$(echo "$tag" | sed "s/'/''/g")
+
             # Insert tag if it doesn't exist, get its ID
             TAG_ID=$(sqlite3 "$DB_PATH" "
-                INSERT OR IGNORE INTO tags (label) VALUES ('$tag');
-                SELECT id FROM tags WHERE label = '$tag';
+                INSERT OR IGNORE INTO tags (label) VALUES ('$tag_escaped');
+                SELECT id FROM tags WHERE label = '$tag_escaped';
             ")
 
             # Link thread to tag
-            sqlite3 "$DB_PATH" "INSERT OR IGNORE INTO thread_tags (thread_id, tag_id) VALUES ('$THREAD_ID', $TAG_ID);"
+            sqlite3 "$DB_PATH" "INSERT OR IGNORE INTO thread_tags (thread_id, tag_id) VALUES ('$THREAD_ID_ESCAPED', $TAG_ID);"
             echo "  Tagged with: $tag"
         done
     fi
@@ -395,11 +408,12 @@ list_tasks() {
         # Build WHERE conditions for multiple tags (AND logic)
         TAG_CONDITIONS=""
         for i in "${!FILTER_TAGS[@]}"; do
-            tag=$(echo "${FILTER_TAGS[$i]}" | xargs) # trim whitespace
+            tag=$(echo "${FILTER_TAGS[$i]}" | xargs)    # trim whitespace
+            tag_escaped=$(echo "$tag" | sed "s/'/''/g") # escape single quotes
             if [ $i -gt 0 ]; then
                 TAG_CONDITIONS="$TAG_CONDITIONS AND "
             fi
-            TAG_CONDITIONS="${TAG_CONDITIONS}t.id IN (SELECT tt${i}.task_id FROM task_tags tt${i} JOIN tags g${i} ON tt${i}.tag_id = g${i}.id WHERE g${i}.label = '$tag')"
+            TAG_CONDITIONS="${TAG_CONDITIONS}t.id IN (SELECT tt${i}.task_id FROM task_tags tt${i} JOIN tags g${i} ON tt${i}.tag_id = g${i}.id WHERE g${i}.label = '$tag_escaped')"
         done
 
         # Get tasks filtered by multiple tags (must have ALL specified tags)
@@ -462,13 +476,16 @@ show_thread() {
 
     THREAD_ID="$1"
 
+    # Escape single quotes for SQL
+    THREAD_ID_ESCAPED=$(echo "$THREAD_ID" | sed "s/'/''/g")
+
     # Get thread with tags
     RESULT=$(sqlite3 "$DB_PATH" "
         SELECT t.thread_id, t.summary, t.resolved, GROUP_CONCAT(g.label) as tags
         FROM amp_threads t
         LEFT JOIN thread_tags tt ON t.thread_id = tt.thread_id
         LEFT JOIN tags g ON tt.tag_id = g.id
-        WHERE t.thread_id = '$THREAD_ID'
+        WHERE t.thread_id = '$THREAD_ID_ESCAPED'
         GROUP BY t.thread_id, t.summary, t.resolved;
     ")
 
@@ -538,11 +555,12 @@ list_threads() {
         # Build WHERE conditions for multiple tags (AND logic)
         TAG_CONDITIONS=""
         for i in "${!FILTER_TAGS[@]}"; do
-            tag=$(echo "${FILTER_TAGS[$i]}" | xargs) # trim whitespace
+            tag=$(echo "${FILTER_TAGS[$i]}" | xargs)    # trim whitespace
+            tag_escaped=$(echo "$tag" | sed "s/'/''/g") # escape single quotes
             if [ $i -gt 0 ]; then
                 TAG_CONDITIONS="$TAG_CONDITIONS AND "
             fi
-            TAG_CONDITIONS="${TAG_CONDITIONS}t.thread_id IN (SELECT tt${i}.thread_id FROM thread_tags tt${i} JOIN tags g${i} ON tt${i}.tag_id = g${i}.id WHERE g${i}.label = '$tag')"
+            TAG_CONDITIONS="${TAG_CONDITIONS}t.thread_id IN (SELECT tt${i}.thread_id FROM thread_tags tt${i} JOIN tags g${i} ON tt${i}.tag_id = g${i}.id WHERE g${i}.label = '$tag_escaped')"
         done
 
         # Get threads filtered by multiple tags (must have ALL specified tags)
@@ -854,11 +872,12 @@ list_artifacts() {
         # Build WHERE conditions for multiple tags (AND logic)
         TAG_CONDITIONS=""
         for i in "${!FILTER_TAGS[@]}"; do
-            tag=$(echo "${FILTER_TAGS[$i]}" | xargs) # trim whitespace
+            tag=$(echo "${FILTER_TAGS[$i]}" | xargs)    # trim whitespace
+            tag_escaped=$(echo "$tag" | sed "s/'/''/g") # escape single quotes
             if [ $i -gt 0 ]; then
                 TAG_CONDITIONS="$TAG_CONDITIONS AND "
             fi
-            TAG_CONDITIONS="${TAG_CONDITIONS}a.id IN (SELECT at${i}.artifact_id FROM artifact_tags at${i} JOIN tags g${i} ON at${i}.tag_id = g${i}.id WHERE g${i}.label = '$tag')"
+            TAG_CONDITIONS="${TAG_CONDITIONS}a.id IN (SELECT at${i}.artifact_id FROM artifact_tags at${i} JOIN tags g${i} ON at${i}.tag_id = g${i}.id WHERE g${i}.label = '$tag_escaped')"
         done
 
         # Get artifacts filtered by multiple tags (must have ALL specified tags)
@@ -1100,11 +1119,12 @@ list_prompts() {
         # Build WHERE conditions for multiple tags (AND logic)
         TAG_CONDITIONS=""
         for i in "${!FILTER_TAGS[@]}"; do
-            tag=$(echo "${FILTER_TAGS[$i]}" | xargs) # trim whitespace
+            tag=$(echo "${FILTER_TAGS[$i]}" | xargs)    # trim whitespace
+            tag_escaped=$(echo "$tag" | sed "s/'/''/g") # escape single quotes
             if [ $i -gt 0 ]; then
                 TAG_CONDITIONS="$TAG_CONDITIONS AND "
             fi
-            TAG_CONDITIONS="${TAG_CONDITIONS}p.id IN (SELECT pt${i}.prompt_id FROM prompt_tags pt${i} JOIN tags g${i} ON pt${i}.tag_id = g${i}.id WHERE g${i}.label = '$tag')"
+            TAG_CONDITIONS="${TAG_CONDITIONS}p.id IN (SELECT pt${i}.prompt_id FROM prompt_tags pt${i} JOIN tags g${i} ON pt${i}.tag_id = g${i}.id WHERE g${i}.label = '$tag_escaped')"
         done
 
         # Get prompts filtered by multiple tags (must have ALL specified tags)
@@ -1380,7 +1400,8 @@ tag_entity() {
             FOREIGN_KEY="task_id"
             ;;
         "thread")
-            ENTITY_EXISTS=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM amp_threads WHERE thread_id = '$ENTITY_ID';")
+            ENTITY_ID_ESCAPED=$(echo "$ENTITY_ID" | sed "s/'/''/g")
+            ENTITY_EXISTS=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM amp_threads WHERE thread_id = '$ENTITY_ID_ESCAPED';")
             if [ "$ENTITY_EXISTS" -eq 0 ]; then
                 echo "Error: Thread $ENTITY_ID not found"
                 exit 1
@@ -1431,8 +1452,8 @@ tag_entity() {
 
         # Link entity to tag based on type
         if [ "$ENTITY_TYPE" = "thread" ]; then
-            # Thread IDs are text, need quotes
-            sqlite3 "$DB_PATH" "INSERT OR IGNORE INTO $JUNCTION_TABLE ($FOREIGN_KEY, tag_id) VALUES ('$ENTITY_ID', $TAG_ID);"
+            # Thread IDs are text, need quotes and escaping
+            sqlite3 "$DB_PATH" "INSERT OR IGNORE INTO $JUNCTION_TABLE ($FOREIGN_KEY, tag_id) VALUES ('$ENTITY_ID_ESCAPED', $TAG_ID);"
         else
             # Task, artifact, and prompt IDs are integers, no quotes
             sqlite3 "$DB_PATH" "INSERT OR IGNORE INTO $JUNCTION_TABLE ($FOREIGN_KEY, tag_id) VALUES ($ENTITY_ID, $TAG_ID);"
