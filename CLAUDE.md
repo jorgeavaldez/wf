@@ -15,6 +15,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `./wf init ~/my-wf.db` - Create new database at specified path
 - `./wf tool overview` - Show complete usage guide for LLM agents
 
+**CRITICAL: Testing with Isolated Database:**
+- ALWAYS use a separate test database when making changes or testing fixes
+- NEVER test against the main production database (usually set in WF_DB_PATH)
+- Example testing pattern:
+  ```bash
+  export WF_DB_PATH="./test-changes.db"
+  ./wf init ./test-changes.db
+  # Run your tests here
+  ./wf add task "test with 'quotes" tag1,tag2
+  # Verify functionality and clean up
+  rm -f ./test-changes.db
+  ```
+- This prevents data corruption and allows safe testing of SQL injection fixes, schema changes, etc.
+
 ## Code Architecture
 
 **Core Components:**
@@ -52,6 +66,33 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Consistent error handling with descriptive messages and proper exit codes
 - Command parsing converts space-separated commands to internal dash format
 - Tag processing splits comma-separated values and trims whitespace
+
+## CRITICAL: SQL Injection Prevention
+
+**ALWAYS sanitize user input when constructing SQL queries:**
+- User input MUST be escaped before insertion into SQL queries
+- Use `sed "s/'/''/g"` to escape single quotes in all user-provided strings
+- This applies to: task descriptions, thread IDs, summaries, tag labels, entity IDs, and any other user input
+
+**Examples of proper escaping:**
+```bash
+# WRONG - Direct insertion (vulnerable to SQL injection)
+sqlite3 "$DB_PATH" "INSERT INTO tasks (note) VALUES ('$TASK_NOTE');"
+
+# CORRECT - Escaped input (safe)
+TASK_NOTE_ESCAPED=$(echo "$TASK_NOTE" | sed "s/'/''/g")
+sqlite3 "$DB_PATH" "INSERT INTO tasks (note) VALUES ('$TASK_NOTE_ESCAPED');"
+```
+
+**Common vulnerable patterns to avoid:**
+- `VALUES ('$user_input')` - Always escape first
+- `WHERE field = '$user_input'` - Always escape first
+- Any direct variable substitution in SQL strings
+
+**Testing for SQL injection vulnerabilities:**
+- Test with inputs containing single quotes: `"foo'bar"`
+- Test with SQL injection payloads: `"'; DROP TABLE tasks; --"`
+- Verify data integrity is preserved and no SQL errors occur
 
 ## Important Notes
 
