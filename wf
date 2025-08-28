@@ -12,13 +12,13 @@ show_help() {
     echo "  $0 add thread <thread_id> \"summary\" [resolved] [tag1,tag2,tag3...]"
     echo "  $0 show thread <thread_id>"
     echo "  $0 list threads [--all] [--count N] [tag]"
-    echo "  $0 add artifact <file_path> [--summarize] [tag1,tag2,tag3...]"
+    echo "  $0 add artifact <file_path|-> [name] [--summarize] [tag1,tag2,tag3...]"
     echo "  $0 link artifact <artifact_id> thread <thread_id>"
     echo "  $0 summarize artifact <artifact_id>"
     echo "  $0 dump artifact <artifact_id>"
     echo "  $0 delete artifact <artifact_id>"
     echo "  $0 list artifacts [--all] [--count N] [tag]"
-    echo "  $0 add prompt <file_path> [--summarize] [tag1,tag2,tag3...]"
+    echo "  $0 add prompt <file_path|-> [name] [--summarize] [tag1,tag2,tag3...]"
     echo "  $0 show prompt <prompt_id>"
     echo "  $0 list prompts [--all] [--count N] [tag]"
     echo "  $0 update prompt <prompt_id> --name \"new name\" --content \"new content\" --description \"new desc\""
@@ -41,6 +41,7 @@ show_help() {
     echo "  $0 list threads"
     echo "  $0 list threads bug"
     echo "  $0 add artifact \"plan.md\" --summarize documentation,planning"
+    echo "  echo \"content\" | $0 add artifact - \"my-doc\" documentation,planning"
     echo "  $0 link artifact 1 thread \"abc123\""
     echo "  $0 summarize artifact 1"
     echo "  $0 dump artifact 1"
@@ -48,6 +49,7 @@ show_help() {
     echo "  $0 list artifacts"
     echo "  $0 list artifacts documentation"
     echo "  $0 add prompt \"prompt.md\" --summarize security,review"
+    echo "  echo \"prompt text\" | $0 add prompt - \"my-prompt\" security,review"
     echo "  $0 show prompt 1"
     echo "  $0 list prompts security"
     echo "  $0 update prompt 1 --content \"Please review this code for security and performance\""
@@ -616,7 +618,7 @@ list_threads() {
 
 add_artifact() {
     if [ $# -eq 0 ]; then
-        echo "Error: File path required"
+        echo "Error: File path or '-' for stdin required"
         show_help
         exit 1
     fi
@@ -625,34 +627,67 @@ add_artifact() {
     TAGS=""
     SUMMARIZE=false
 
-    # Parse arguments to handle --summarize flag
-    shift
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            "--summarize")
-                SUMMARIZE=true
-                shift
-                ;;
-            *)
-                if [ -z "$TAGS" ]; then
-                    TAGS="$1"
-                fi
-                shift
-                ;;
-        esac
-    done
+    # Check if using stdin
+    if [ "$FILE_PATH" = "-" ] || [ "$FILE_PATH" = "--stdin" ]; then
+        # Check if stdin has data available
+        if [ -t 0 ]; then
+            echo "Error: No stdin data available"
+            exit 1
+        fi
 
-    # Check if file exists
-    if [ ! -f "$FILE_PATH" ]; then
-        echo "Error: File '$FILE_PATH' not found"
-        exit 1
+        # Parse arguments for stdin mode (filename is optional second argument)
+        FILENAME="${2:-stdin-content}"
+        shift 2 2>/dev/null || shift # Handle case where only one argument provided
+
+        # Parse remaining arguments
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                "--summarize")
+                    SUMMARIZE=true
+                    shift
+                    ;;
+                *)
+                    if [ -z "$TAGS" ]; then
+                        TAGS="$1"
+                    fi
+                    shift
+                    ;;
+            esac
+        done
+
+        # Read from stdin and escape single quotes for SQL
+        CONTENT=$(cat | sed "s/'/''/g")
+        FILENAME=$(echo "$FILENAME" | sed "s/'/''/g")
+    else
+        # Parse arguments to handle --summarize flag
+        shift
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                "--summarize")
+                    SUMMARIZE=true
+                    shift
+                    ;;
+                *)
+                    if [ -z "$TAGS" ]; then
+                        TAGS="$1"
+                    fi
+                    shift
+                    ;;
+            esac
+        done
+
+        # Check if file exists
+        if [ ! -f "$FILE_PATH" ]; then
+            echo "Error: File '$FILE_PATH' not found"
+            exit 1
+        fi
+
+        # Get filename from path and escape single quotes for SQL
+        FILENAME=$(basename "$FILE_PATH" | sed "s/'/''/g")
+
+        # Read file content and escape single quotes for SQL
+        CONTENT=$(cat "$FILE_PATH" | sed "s/'/''/g")
     fi
-
-    # Get filename from path and escape single quotes for SQL
-    FILENAME=$(basename "$FILE_PATH" | sed "s/'/''/g")
-
-    # Read file content and escape single quotes for SQL
-    CONTENT=$(cat "$FILE_PATH" | sed "s/'/''/g")
 
     # Insert the artifact and get its ID
     ARTIFACT_ID=$(sqlite3 "$DB_PATH" "INSERT INTO artifacts (filename, content) VALUES ('$FILENAME', '$CONTENT'); SELECT last_insert_rowid();")
@@ -937,7 +972,7 @@ list_artifacts() {
 
 add_prompt() {
     if [ $# -eq 0 ]; then
-        echo "Error: File path required"
+        echo "Error: File path or '-' for stdin required"
         show_help
         exit 1
     fi
@@ -946,34 +981,67 @@ add_prompt() {
     TAGS=""
     SUMMARIZE=false
 
-    # Parse arguments to handle --summarize flag
-    shift
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            "--summarize")
-                SUMMARIZE=true
-                shift
-                ;;
-            *)
-                if [ -z "$TAGS" ]; then
-                    TAGS="$1"
-                fi
-                shift
-                ;;
-        esac
-    done
+    # Check if using stdin
+    if [ "$FILE_PATH" = "-" ] || [ "$FILE_PATH" = "--stdin" ]; then
+        # Check if stdin has data available
+        if [ -t 0 ]; then
+            echo "Error: No stdin data available"
+            exit 1
+        fi
 
-    # Check if file exists
-    if [ ! -f "$FILE_PATH" ]; then
-        echo "Error: File '$FILE_PATH' not found"
-        exit 1
+        # Parse arguments for stdin mode (prompt name is optional second argument)
+        PROMPT_NAME="${2:-stdin-prompt}"
+        shift 2 2>/dev/null || shift # Handle case where only one argument provided
+
+        # Parse remaining arguments
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                "--summarize")
+                    SUMMARIZE=true
+                    shift
+                    ;;
+                *)
+                    if [ -z "$TAGS" ]; then
+                        TAGS="$1"
+                    fi
+                    shift
+                    ;;
+            esac
+        done
+
+        # Read from stdin and escape single quotes for SQL
+        PROMPT_CONTENT=$(cat | sed "s/'/''/g")
+        PROMPT_NAME=$(echo "$PROMPT_NAME" | sed "s/'/''/g")
+    else
+        # Parse arguments to handle --summarize flag
+        shift
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                "--summarize")
+                    SUMMARIZE=true
+                    shift
+                    ;;
+                *)
+                    if [ -z "$TAGS" ]; then
+                        TAGS="$1"
+                    fi
+                    shift
+                    ;;
+            esac
+        done
+
+        # Check if file exists
+        if [ ! -f "$FILE_PATH" ]; then
+            echo "Error: File '$FILE_PATH' not found"
+            exit 1
+        fi
+
+        # Get filename from path and escape single quotes for SQL
+        PROMPT_NAME=$(basename "$FILE_PATH" | sed "s/'/''/g")
+
+        # Read file content and escape single quotes for SQL
+        PROMPT_CONTENT=$(cat "$FILE_PATH" | sed "s/'/''/g")
     fi
-
-    # Get filename from path and escape single quotes for SQL
-    PROMPT_NAME=$(basename "$FILE_PATH" | sed "s/'/''/g")
-
-    # Read file content and escape single quotes for SQL
-    PROMPT_CONTENT=$(cat "$FILE_PATH" | sed "s/'/''/g")
 
     # Insert the prompt and get its ID
     PROMPT_ID=$(sqlite3 "$DB_PATH" "INSERT INTO prompts (name, content) VALUES ('$PROMPT_NAME', '$PROMPT_CONTENT'); SELECT last_insert_rowid();")
@@ -1481,6 +1549,8 @@ wf add task "Fix login" urgent,backend
 wf add thread "conv123" "Fixed OAuth bug" true bug,resolved  
 wf add artifact "design.md" architecture,planning
 wf add prompt "code-review.md" security,review
+echo "content" | wf add artifact - "stdin-doc" temp
+pbpaste | wf add prompt - "clipboard-prompt" review
 wf summarize prompt 1
 wf link artifact 1 thread "conv123"
 wf link prompt 1 task 5
@@ -1496,7 +1566,7 @@ WORKFLOW PATTERNS:
 Feature Development:
 - wf add task "New feature" feature,high
 - wf add artifact "design.md" feature,planning
-- wf add prompt "feature-review.md" feature,review
+- echo "Review implementation approach" | wf add prompt - "feature-review" feature,review
 - wf add thread "conv456" "Discussed implementation" false feature
 - wf link artifact 1 task 1; wf link prompt 1 task 1; wf link artifact 1 thread "conv456"
 
@@ -1531,6 +1601,8 @@ BEST PRACTICES:
 - Reference artifact/prompt IDs in commit messages and code comments
 - Pipe content to AI: wf dump artifact 5 | claude "prompt" or wf dump prompt 3 | claude
 - Update prompts as you refine them: wf update prompt 1 --content "improved version"
+- Use stdin for quick content: pbpaste | wf add artifact - "clipboard" temp
+- From editors: :'<,'>w !wf add artifact - "buffer-content" coding
 
 PROMPT MANAGEMENT:
 - Create templates: wf add prompt "api-review.md" api,template
