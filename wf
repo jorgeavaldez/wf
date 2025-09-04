@@ -27,6 +27,8 @@ show_help() {
     echo "  $0 dump prompt <prompt_id>"
     echo "  $0 link prompt <prompt_id> task <task_id>"
     echo "  $0 tag <type> <id> [tag1,tag2,tag3...]"
+    echo "  $0 search <entity> <query> [--limit N]"
+    echo "  $0 migrate search"
     echo "  $0 tool overview"
     echo "  $0 init <db_path>"
     echo ""
@@ -61,8 +63,186 @@ show_help() {
     echo "  $0 tag thread \"abc123\" resolved"
     echo "  $0 tag artifact 1 outdated"
     echo "  $0 tag prompt 1 favorite,security"
+    echo "  $0 search tasks \"login bug\""
+    echo "  $0 search artifacts \"design\" --limit 5"
+    echo "  $0 search prompts \"security review\""
+    echo "  $0 search threads \"authentication\""
+    echo "  $0 search tags \"urgent\""
+    echo "  $0 migrate search"
     echo "  $0 tool overview"
     echo "  $0 init ~/my-wf.db"
+}
+
+migrate_search() {
+    echo "Running FTS5 search migration..."
+
+    # Check if SQLite has FTS5 support
+    FTS5_SUPPORT=$(sqlite3 "$DB_PATH" "PRAGMA compile_options;" 2>/dev/null | grep -c "ENABLE_FTS5" || echo "0")
+    if [ "$FTS5_SUPPORT" -eq 0 ]; then
+        echo "Error: SQLite FTS5 not available. Please install SQLite with FTS5 support."
+        echo "On macOS: brew install sqlite"
+        echo "On Ubuntu/Debian: apt-get install sqlite3"
+        exit 1
+    fi
+
+    # Ensure meta table exists
+    sqlite3 "$DB_PATH" "CREATE TABLE IF NOT EXISTS wf_meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );"
+
+    # Check if migration already applied
+    MIGRATION_APPLIED=$(sqlite3 "$DB_PATH" "SELECT value FROM wf_meta WHERE key='migration:fts_search_v1';" 2>/dev/null || echo "")
+    if [ "$MIGRATION_APPLIED" = "applied" ]; then
+        echo "FTS search migration already applied."
+        exit 0
+    fi
+
+    echo "Creating FTS tables and triggers..."
+
+    # Create FTS tables and triggers in a transaction
+    sqlite3 "$DB_PATH" <<'EOF'
+BEGIN;
+
+-- Create FTS5 virtual tables
+CREATE VIRTUAL TABLE IF NOT EXISTS fts_tasks USING fts5(note, content='tasks', content_rowid='id');
+CREATE VIRTUAL TABLE IF NOT EXISTS fts_threads USING fts5(thread_id, summary, content='amp_threads', content_rowid='rowid');
+CREATE VIRTUAL TABLE IF NOT EXISTS fts_artifacts USING fts5(filename, summary, content, content='artifacts', content_rowid='id');
+CREATE VIRTUAL TABLE IF NOT EXISTS fts_prompts USING fts5(name, description, content, content='prompts', content_rowid='id');
+CREATE VIRTUAL TABLE IF NOT EXISTS fts_tags USING fts5(label, content='tags', content_rowid='id');
+
+-- Create triggers for tasks
+CREATE TRIGGER IF NOT EXISTS tasks_ai AFTER INSERT ON tasks BEGIN
+  INSERT INTO fts_tasks(rowid, note) VALUES (new.id, new.note);
+END;
+
+CREATE TRIGGER IF NOT EXISTS tasks_ad AFTER DELETE ON tasks BEGIN
+  INSERT INTO fts_tasks(fts_tasks, rowid, note) VALUES('delete', old.id, old.note);
+END;
+
+CREATE TRIGGER IF NOT EXISTS tasks_au AFTER UPDATE ON tasks BEGIN
+  INSERT INTO fts_tasks(fts_tasks, rowid, note) VALUES('delete', old.id, old.note);
+  INSERT INTO fts_tasks(rowid, note) VALUES (new.id, new.note);
+END;
+
+-- Create triggers for threads
+CREATE TRIGGER IF NOT EXISTS amp_threads_ai AFTER INSERT ON amp_threads BEGIN
+  INSERT INTO fts_threads(rowid, thread_id, summary)
+  VALUES (new.rowid, new.thread_id, new.summary);
+END;
+
+CREATE TRIGGER IF NOT EXISTS amp_threads_ad AFTER DELETE ON amp_threads BEGIN
+  INSERT INTO fts_threads(fts_threads, rowid, thread_id, summary)
+  VALUES ('delete', old.rowid, old.thread_id, old.summary);
+END;
+
+CREATE TRIGGER IF NOT EXISTS amp_threads_au AFTER UPDATE ON amp_threads BEGIN
+  INSERT INTO fts_threads(fts_threads, rowid, thread_id, summary)
+  VALUES ('delete', old.rowid, old.thread_id, old.summary);
+  INSERT INTO fts_threads(rowid, thread_id, summary)
+  VALUES (new.rowid, new.thread_id, new.summary);
+END;
+
+-- Create triggers for artifacts
+CREATE TRIGGER IF NOT EXISTS artifacts_ai AFTER INSERT ON artifacts BEGIN
+  INSERT INTO fts_artifacts(rowid, filename, summary, content)
+  VALUES (new.id, new.filename, new.summary, new.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS artifacts_ad AFTER DELETE ON artifacts BEGIN
+  INSERT INTO fts_artifacts(fts_artifacts, rowid, filename, summary, content)
+  VALUES ('delete', old.id, old.filename, old.summary, old.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS artifacts_au AFTER UPDATE ON artifacts BEGIN
+  INSERT INTO fts_artifacts(fts_artifacts, rowid, filename, summary, content)
+  VALUES ('delete', old.id, old.filename, old.summary, old.content);
+  INSERT INTO fts_artifacts(rowid, filename, summary, content)
+  VALUES (new.id, new.filename, new.summary, new.content);
+END;
+
+-- Create triggers for prompts
+CREATE TRIGGER IF NOT EXISTS prompts_ai AFTER INSERT ON prompts BEGIN
+  INSERT INTO fts_prompts(rowid, name, description, content)
+  VALUES (new.id, new.name, new.description, new.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS prompts_ad AFTER DELETE ON prompts BEGIN
+  INSERT INTO fts_prompts(fts_prompts, rowid, name, description, content)
+  VALUES ('delete', old.id, old.name, old.description, old.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS prompts_au AFTER UPDATE ON prompts BEGIN
+  INSERT INTO fts_prompts(fts_prompts, rowid, name, description, content)
+  VALUES ('delete', old.id, old.name, old.description, old.content);
+  INSERT INTO fts_prompts(rowid, name, description, content)
+  VALUES (new.id, new.name, new.description, new.content);
+END;
+
+-- Create triggers for tags
+CREATE TRIGGER IF NOT EXISTS tags_ai AFTER INSERT ON tags BEGIN
+  INSERT INTO fts_tags(rowid, label) VALUES (new.id, new.label);
+END;
+
+CREATE TRIGGER IF NOT EXISTS tags_ad AFTER DELETE ON tags BEGIN
+  INSERT INTO fts_tags(fts_tags, rowid, label) VALUES('delete', old.id, old.label);
+END;
+
+CREATE TRIGGER IF NOT EXISTS tags_au AFTER UPDATE ON tags BEGIN
+  INSERT INTO fts_tags(fts_tags, rowid, label) VALUES('delete', old.id, old.label);
+  INSERT INTO fts_tags(rowid, label) VALUES (new.id, new.label);
+END;
+
+COMMIT;
+EOF
+
+    if [ $? -ne 0 ]; then
+        echo "Error: Failed to create FTS tables and triggers"
+        exit 1
+    fi
+
+    # Check if FTS tables are empty and backfill if needed
+    TASKS_COUNT=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM fts_tasks;" 2>/dev/null || echo "0")
+    if [ "$TASKS_COUNT" -eq 0 ]; then
+        echo "Backfilling existing data..."
+
+        sqlite3 "$DB_PATH" <<'EOF'
+BEGIN;
+-- Backfill FTS tables from existing data
+INSERT INTO fts_tasks(rowid, note) SELECT id, note FROM tasks;
+INSERT INTO fts_threads(rowid, thread_id, summary) SELECT rowid, thread_id, summary FROM amp_threads;
+INSERT INTO fts_artifacts(rowid, filename, summary, content) SELECT id, filename, summary, content FROM artifacts;
+INSERT INTO fts_prompts(rowid, name, description, content) SELECT id, name, description, content FROM prompts;
+INSERT INTO fts_tags(rowid, label) SELECT id, label FROM tags;
+
+-- Rebuild FTS indexes to ensure proper synchronization
+INSERT INTO fts_tasks(fts_tasks) VALUES('rebuild');
+INSERT INTO fts_threads(fts_threads) VALUES('rebuild');
+INSERT INTO fts_artifacts(fts_artifacts) VALUES('rebuild');
+INSERT INTO fts_prompts(fts_prompts) VALUES('rebuild');
+INSERT INTO fts_tags(fts_tags) VALUES('rebuild');
+COMMIT;
+EOF
+
+        if [ $? -ne 0 ]; then
+            echo "Error: Failed to backfill FTS data"
+            exit 1
+        fi
+        echo "Backfill completed successfully."
+    else
+        echo "FTS tables already contain data, skipping backfill."
+    fi
+
+    # Record migration applied and update schema version
+    sqlite3 "$DB_PATH" "
+        INSERT INTO wf_meta(key,value) VALUES('migration:fts_search_v1','applied')
+        ON CONFLICT(key) DO UPDATE SET value='applied', updated_at=CURRENT_TIMESTAMP;
+        INSERT INTO wf_meta(key,value) VALUES('schema_version','2')
+        ON CONFLICT(key) DO UPDATE SET value='2', updated_at=CURRENT_TIMESTAMP;
+    "
+
+    echo "FTS search migration completed successfully!"
 }
 
 init_database() {
@@ -200,6 +380,107 @@ CREATE TABLE prompt_artifact_links (
     FOREIGN KEY (prompt_id) REFERENCES prompts(id) ON DELETE CASCADE,
     FOREIGN KEY (artifact_id) REFERENCES artifacts(id) ON DELETE CASCADE
 );
+
+-- Migration/version tracking
+CREATE TABLE IF NOT EXISTS wf_meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- FTS5 virtual tables
+CREATE VIRTUAL TABLE IF NOT EXISTS fts_tasks USING fts5(note, content='tasks', content_rowid='id');
+CREATE VIRTUAL TABLE IF NOT EXISTS fts_threads USING fts5(thread_id, summary, content='amp_threads', content_rowid='rowid');
+CREATE VIRTUAL TABLE IF NOT EXISTS fts_artifacts USING fts5(filename, summary, content, content='artifacts', content_rowid='id');
+CREATE VIRTUAL TABLE IF NOT EXISTS fts_prompts USING fts5(name, description, content, content='prompts', content_rowid='id');
+CREATE VIRTUAL TABLE IF NOT EXISTS fts_tags USING fts5(label, content='tags', content_rowid='id');
+
+-- Triggers to keep FTS in sync with base tables
+-- Tasks triggers
+CREATE TRIGGER IF NOT EXISTS tasks_ai AFTER INSERT ON tasks BEGIN
+  INSERT INTO fts_tasks(rowid, note) VALUES (new.id, new.note);
+END;
+
+CREATE TRIGGER IF NOT EXISTS tasks_ad AFTER DELETE ON tasks BEGIN
+  INSERT INTO fts_tasks(fts_tasks, rowid, note) VALUES('delete', old.id, old.note);
+END;
+
+CREATE TRIGGER IF NOT EXISTS tasks_au AFTER UPDATE ON tasks BEGIN
+  INSERT INTO fts_tasks(fts_tasks, rowid, note) VALUES('delete', old.id, old.note);
+  INSERT INTO fts_tasks(rowid, note) VALUES (new.id, new.note);
+END;
+
+-- Threads triggers
+CREATE TRIGGER IF NOT EXISTS amp_threads_ai AFTER INSERT ON amp_threads BEGIN
+  INSERT INTO fts_threads(rowid, thread_id, summary)
+  VALUES (new.rowid, new.thread_id, new.summary);
+END;
+
+CREATE TRIGGER IF NOT EXISTS amp_threads_ad AFTER DELETE ON amp_threads BEGIN
+  INSERT INTO fts_threads(fts_threads, rowid, thread_id, summary)
+  VALUES ('delete', old.rowid, old.thread_id, old.summary);
+END;
+
+CREATE TRIGGER IF NOT EXISTS amp_threads_au AFTER UPDATE ON amp_threads BEGIN
+  INSERT INTO fts_threads(fts_threads, rowid, thread_id, summary)
+  VALUES ('delete', old.rowid, old.thread_id, old.summary);
+  INSERT INTO fts_threads(rowid, thread_id, summary)
+  VALUES (new.rowid, new.thread_id, new.summary);
+END;
+
+-- Artifacts triggers
+CREATE TRIGGER IF NOT EXISTS artifacts_ai AFTER INSERT ON artifacts BEGIN
+  INSERT INTO fts_artifacts(rowid, filename, summary, content)
+  VALUES (new.id, new.filename, new.summary, new.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS artifacts_ad AFTER DELETE ON artifacts BEGIN
+  INSERT INTO fts_artifacts(fts_artifacts, rowid, filename, summary, content)
+  VALUES ('delete', old.id, old.filename, old.summary, old.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS artifacts_au AFTER UPDATE ON artifacts BEGIN
+  INSERT INTO fts_artifacts(fts_artifacts, rowid, filename, summary, content)
+  VALUES ('delete', old.id, old.filename, old.summary, old.content);
+  INSERT INTO fts_artifacts(rowid, filename, summary, content)
+  VALUES (new.id, new.filename, new.summary, new.content);
+END;
+
+-- Prompts triggers
+CREATE TRIGGER IF NOT EXISTS prompts_ai AFTER INSERT ON prompts BEGIN
+  INSERT INTO fts_prompts(rowid, name, description, content)
+  VALUES (new.id, new.name, new.description, new.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS prompts_ad AFTER DELETE ON prompts BEGIN
+  INSERT INTO fts_prompts(fts_prompts, rowid, name, description, content)
+  VALUES ('delete', old.id, old.name, old.description, old.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS prompts_au AFTER UPDATE ON prompts BEGIN
+  INSERT INTO fts_prompts(fts_prompts, rowid, name, description, content)
+  VALUES ('delete', old.id, old.name, old.description, old.content);
+  INSERT INTO fts_prompts(rowid, name, description, content)
+  VALUES (new.id, new.name, new.description, new.content);
+END;
+
+-- Tags triggers
+CREATE TRIGGER IF NOT EXISTS tags_ai AFTER INSERT ON tags BEGIN
+  INSERT INTO fts_tags(rowid, label) VALUES (new.id, new.label);
+END;
+
+CREATE TRIGGER IF NOT EXISTS tags_ad AFTER DELETE ON tags BEGIN
+  INSERT INTO fts_tags(fts_tags, rowid, label) VALUES('delete', old.id, old.label);
+END;
+
+CREATE TRIGGER IF NOT EXISTS tags_au AFTER UPDATE ON tags BEGIN
+  INSERT INTO fts_tags(fts_tags, rowid, label) VALUES('delete', old.id, old.label);
+  INSERT INTO fts_tags(rowid, label) VALUES (new.id, new.label);
+END;
+
+-- Set baseline schema version for new databases
+INSERT INTO wf_meta(key,value) VALUES('schema_version','2')
+ON CONFLICT(key) DO UPDATE SET value='2', updated_at=CURRENT_TIMESTAMP;
 EOF
 
     if [ $? -eq 0 ]; then
@@ -1531,6 +1812,367 @@ tag_entity() {
     done
 }
 
+sanitize_fts_query() {
+    local query="$1"
+    
+    # FTS5 doesn't handle certain characters well in MATCH queries
+    # Remove or replace problematic characters:
+    # - Remove single quotes (apostrophes)
+    # - Remove double quotes (unless we want phrase search)
+    # - Remove other FTS5 special characters that cause syntax errors
+    
+    # Remove single quotes and replace with space
+    query=$(echo "$query" | sed "s/'/ /g")
+    
+    # Remove double quotes and replace with space
+    query=$(echo "$query" | sed 's/"/ /g')
+    
+    # Remove FTS5 special characters one by one (safer than character class)
+    query=$(echo "$query" | sed 's/(/ /g')     # Remove (
+    query=$(echo "$query" | sed 's/)/ /g')     # Remove )
+    query=$(echo "$query" | sed 's/\[/ /g')    # Remove [
+    query=$(echo "$query" | sed 's/\]/ /g')    # Remove ]
+    query=$(echo "$query" | sed 's/{/ /g')     # Remove {
+    query=$(echo "$query" | sed 's/}/ /g')     # Remove }
+    query=$(echo "$query" | sed 's/\^/ /g')    # Remove ^
+    query=$(echo "$query" | sed 's/\$/ /g')    # Remove $
+    query=$(echo "$query" | sed 's/\*/ /g')    # Remove *
+    query=$(echo "$query" | sed 's/+/ /g')     # Remove +
+    query=$(echo "$query" | sed 's/?/ /g')     # Remove ?
+    query=$(echo "$query" | sed 's/|/ /g')     # Remove |
+    query=$(echo "$query" | sed 's/\\/ /g')    # Remove \
+    query=$(echo "$query" | sed 's/;/ /g')     # Remove ;
+    query=$(echo "$query" | sed 's/-/ /g')     # Remove -
+    
+    # Remove extra whitespace and trim
+    query=$(echo "$query" | sed 's/[[:space:]]\+/ /g' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
+    
+    # Escape single quotes for SQL (after FTS sanitization)
+    query=$(echo "$query" | sed "s/'/''/g")
+    
+    echo "$query"
+}
+
+search_entrypoint() {
+    if [ $# -lt 2 ]; then
+        echo "Error: Entity type and query required"
+        echo "Usage: $0 search <entity> <query> [--limit N]"
+        echo "Entities: tasks, threads, artifacts, prompts, tags"
+        echo "Note: Special characters like quotes, parentheses, etc. are automatically removed from queries"
+        exit 1
+    fi
+
+    ENTITY_TYPE="$1"
+    QUERY="$2"
+    shift 2
+    
+    # Parse --limit option
+    LIMIT="10"  # default limit
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            "--limit")
+                if [ -z "$2" ] || ! echo "$2" | grep -q '^[0-9][0-9]*$'; then
+                    echo "Error: --limit requires a positive integer"
+                    exit 1
+                fi
+                LIMIT="$2"
+                shift 2
+                ;;
+            *)
+                echo "Error: Unknown option '$1'"
+                exit 1
+                ;;
+        esac
+    done
+    
+    # Check if FTS tables exist
+    FTS_TABLE_EXISTS=$(sqlite3 "$DB_PATH" "SELECT name FROM sqlite_master WHERE type='table' AND name='fts_tasks';" 2>/dev/null || echo "")
+    if [ -z "$FTS_TABLE_EXISTS" ]; then
+        echo "Search not initialized. Run: wf migrate search"
+        exit 1
+    fi
+    
+    # Route to appropriate search function
+    case "$ENTITY_TYPE" in
+        "tasks")
+            search_tasks "$QUERY" "$LIMIT"
+            ;;
+        "threads")
+            search_threads "$QUERY" "$LIMIT"
+            ;;
+        "artifacts")
+            search_artifacts "$QUERY" "$LIMIT"
+            ;;
+        "prompts")
+            search_prompts "$QUERY" "$LIMIT"
+            ;;
+        "tags")
+            search_tags "$QUERY" "$LIMIT"
+            ;;
+        *)
+            echo "Error: Entity type must be 'tasks', 'threads', 'artifacts', 'prompts', or 'tags'"
+            exit 1
+            ;;
+    esac
+}
+
+search_tasks() {
+    local query="$1"
+    local limit="$2"
+    
+    # Sanitize query for FTS5 and escape for SQL
+    local query_escaped=$(sanitize_fts_query "$query")
+    
+    # Check if bm25 is available, fall back to simple ordering if not
+    local bm25_test=$(sqlite3 "$DB_PATH" "SELECT bm25(fts_tasks) FROM fts_tasks LIMIT 1;" 2>/dev/null)
+    local bm25_available=0
+    if [ $? -eq 0 ] && [ -n "$bm25_test" ]; then
+        bm25_available=1
+    fi
+    
+    local order_clause
+    if [ "$bm25_available" -eq 1 ]; then
+        order_clause="ORDER BY bm25(f) ASC, t.id DESC"
+    else
+        echo "Warning: bm25() unavailable; using simple ordering"
+        order_clause="ORDER BY t.id DESC"
+    fi
+    
+    local result
+    if [ "$bm25_available" -eq 1 ]; then
+        result=$(sqlite3 "$DB_PATH" "
+            SELECT t.id, t.note
+            FROM tasks t
+            JOIN (SELECT rowid, bm25(fts_tasks) as score FROM fts_tasks WHERE fts_tasks MATCH '$query_escaped') fts ON t.id = fts.rowid
+            ORDER BY fts.score ASC, t.id DESC
+            LIMIT $limit;
+        ")
+    else
+        result=$(sqlite3 "$DB_PATH" "
+            SELECT t.id, t.note
+            FROM tasks t
+            WHERE t.id IN (SELECT rowid FROM fts_tasks WHERE fts_tasks MATCH '$query_escaped')
+            ORDER BY t.id DESC
+            LIMIT $limit;
+        ")
+    fi
+    
+    if [ -z "$result" ]; then
+        echo "No tasks found matching '$query'"
+        return 0
+    fi
+    
+    echo "Tasks matching '$query':"
+    echo "======================="
+    echo "$result" | while IFS='|' read -r id note; do
+        echo "[#$id] $note"
+    done
+}
+
+search_threads() {
+    local query="$1"
+    local limit="$2"
+    
+    # Sanitize query for FTS5 and escape for SQL
+    local query_escaped=$(sanitize_fts_query "$query")
+    
+    # Check if bm25 is available, fall back to simple ordering if not
+    local bm25_test=$(sqlite3 "$DB_PATH" "SELECT bm25(fts_threads) FROM fts_threads LIMIT 1;" 2>/dev/null)
+    local bm25_available=0
+    if [ $? -eq 0 ] && [ -n "$bm25_test" ]; then
+        bm25_available=1
+    fi
+    
+    local result
+    if [ "$bm25_available" -eq 1 ]; then
+        result=$(sqlite3 "$DB_PATH" "
+            SELECT th.thread_id, th.summary, th.resolved
+            FROM amp_threads th
+            JOIN (SELECT rowid, bm25(fts_threads) as score FROM fts_threads WHERE fts_threads MATCH '$query_escaped') fts ON th.rowid = fts.rowid
+            ORDER BY fts.score ASC, th.resolved ASC, th.thread_id DESC
+            LIMIT $limit;
+        ")
+    else
+        echo "Warning: bm25() unavailable; using simple ordering"
+        result=$(sqlite3 "$DB_PATH" "
+            SELECT th.thread_id, th.summary, th.resolved
+            FROM amp_threads th
+            WHERE th.rowid IN (SELECT rowid FROM fts_threads WHERE fts_threads MATCH '$query_escaped')
+            ORDER BY th.resolved ASC, th.thread_id DESC
+            LIMIT $limit;
+        ")
+    fi
+    
+    if [ -z "$result" ]; then
+        echo "No threads found matching '$query'"
+        return 0
+    fi
+    
+    echo "Threads matching '$query':"
+    echo "=========================="
+    echo "$result" | while IFS='|' read -r thread_id summary resolved; do
+        local status="unresolved"
+        if [ "$resolved" = "1" ]; then
+            status="resolved"
+        fi
+        echo "$thread_id — $summary [$status]"
+    done
+}
+
+search_artifacts() {
+    local query="$1"
+    local limit="$2"
+    
+    # Sanitize query for FTS5 and escape for SQL
+    local query_escaped=$(sanitize_fts_query "$query")
+    
+    # Check if bm25 is available, fall back to simple ordering if not
+    local bm25_test=$(sqlite3 "$DB_PATH" "SELECT bm25(fts_artifacts) FROM fts_artifacts LIMIT 1;" 2>/dev/null)
+    local bm25_available=0
+    if [ $? -eq 0 ] && [ -n "$bm25_test" ]; then
+        bm25_available=1
+    fi
+    
+    local result
+    if [ "$bm25_available" -eq 1 ]; then
+        result=$(sqlite3 "$DB_PATH" "
+            SELECT a.id, a.filename, COALESCE(a.summary, '') AS summary,
+                   (SELECT snippet(fts_artifacts, -1, '[', ']', ' … ', 12) FROM fts_artifacts WHERE rowid = a.id AND fts_artifacts MATCH '$query_escaped') AS snippet
+            FROM artifacts a
+            JOIN (SELECT rowid, bm25(fts_artifacts) as score FROM fts_artifacts WHERE fts_artifacts MATCH '$query_escaped') fts ON a.id = fts.rowid
+            ORDER BY fts.score ASC, a.created_at DESC, a.id DESC
+            LIMIT $limit;
+        ")
+    else
+        echo "Warning: bm25() unavailable; using simple ordering"
+        result=$(sqlite3 "$DB_PATH" "
+            SELECT a.id, a.filename, COALESCE(a.summary, '') AS summary,
+                   (SELECT snippet(fts_artifacts, -1, '[', ']', ' … ', 12) FROM fts_artifacts WHERE rowid = a.id AND fts_artifacts MATCH '$query_escaped') AS snippet
+            FROM artifacts a
+            WHERE a.id IN (SELECT rowid FROM fts_artifacts WHERE fts_artifacts MATCH '$query_escaped')
+            ORDER BY a.created_at DESC, a.id DESC
+            LIMIT $limit;
+        ")
+    fi
+    
+    if [ -z "$result" ]; then
+        echo "No artifacts found matching '$query'"
+        return 0
+    fi
+    
+    echo "Artifacts matching '$query':"
+    echo "============================"
+    echo "$result" | while IFS='|' read -r id filename summary snippet; do
+        echo "[#$id] $filename — $summary"
+        if [ -n "$snippet" ] && [ "$snippet" != "" ]; then
+            echo "  Snippet: $snippet"
+        fi
+        echo ""
+    done
+}
+
+search_prompts() {
+    local query="$1"
+    local limit="$2"
+    
+    # Sanitize query for FTS5 and escape for SQL
+    local query_escaped=$(sanitize_fts_query "$query")
+    
+    # Check if bm25 is available, fall back to simple ordering if not
+    local bm25_test=$(sqlite3 "$DB_PATH" "SELECT bm25(fts_prompts) FROM fts_prompts LIMIT 1;" 2>/dev/null)
+    local bm25_available=0
+    if [ $? -eq 0 ] && [ -n "$bm25_test" ]; then
+        bm25_available=1
+    fi
+    
+    local result
+    if [ "$bm25_available" -eq 1 ]; then
+        result=$(sqlite3 "$DB_PATH" "
+            SELECT p.id, p.name, COALESCE(p.description, '') AS description,
+                   (SELECT snippet(fts_prompts, -1, '[', ']', ' … ', 12) FROM fts_prompts WHERE rowid = p.id AND fts_prompts MATCH '$query_escaped') AS snippet
+            FROM prompts p
+            JOIN (SELECT rowid, bm25(fts_prompts) as score FROM fts_prompts WHERE fts_prompts MATCH '$query_escaped') fts ON p.id = fts.rowid
+            ORDER BY fts.score ASC, p.created_at DESC, p.id DESC
+            LIMIT $limit;
+        ")
+    else
+        echo "Warning: bm25() unavailable; using simple ordering"
+        result=$(sqlite3 "$DB_PATH" "
+            SELECT p.id, p.name, COALESCE(p.description, '') AS description,
+                   (SELECT snippet(fts_prompts, -1, '[', ']', ' … ', 12) FROM fts_prompts WHERE rowid = p.id AND fts_prompts MATCH '$query_escaped') AS snippet
+            FROM prompts p
+            WHERE p.id IN (SELECT rowid FROM fts_prompts WHERE fts_prompts MATCH '$query_escaped')
+            ORDER BY p.created_at DESC, p.id DESC
+            LIMIT $limit;
+        ")
+    fi
+    
+    if [ -z "$result" ]; then
+        echo "No prompts found matching '$query'"
+        return 0
+    fi
+    
+    echo "Prompts matching '$query':"
+    echo "========================="
+    echo "$result" | while IFS='|' read -r id name description snippet; do
+        local first_line_desc=""
+        if [ -n "$description" ] && [ "$description" != "" ]; then
+            first_line_desc=$(echo "$description" | head -n1)
+        fi
+        echo "[#$id] $name — $first_line_desc"
+        if [ -n "$snippet" ] && [ "$snippet" != "" ]; then
+            echo "  Snippet: $snippet"
+        fi
+        echo ""
+    done
+}
+
+search_tags() {
+    local query="$1"
+    local limit="$2"
+    
+    # Sanitize query for FTS5 and escape for SQL
+    local query_escaped=$(sanitize_fts_query "$query")
+    
+    # Check if bm25 is available, fall back to simple ordering if not
+    local bm25_test=$(sqlite3 "$DB_PATH" "SELECT bm25(fts_tags) FROM fts_tags LIMIT 1;" 2>/dev/null)
+    local bm25_available=0
+    if [ $? -eq 0 ] && [ -n "$bm25_test" ]; then
+        bm25_available=1
+    fi
+    
+    local result
+    if [ "$bm25_available" -eq 1 ]; then
+        result=$(sqlite3 "$DB_PATH" "
+            SELECT g.id, g.label
+            FROM tags g
+            JOIN (SELECT rowid, bm25(fts_tags) as score FROM fts_tags WHERE fts_tags MATCH '$query_escaped') fts ON g.id = fts.rowid
+            ORDER BY fts.score ASC, g.label COLLATE NOCASE ASC
+            LIMIT $limit;
+        ")
+    else
+        echo "Warning: bm25() unavailable; using simple ordering"
+        result=$(sqlite3 "$DB_PATH" "
+            SELECT g.id, g.label
+            FROM tags g
+            WHERE g.id IN (SELECT rowid FROM fts_tags WHERE fts_tags MATCH '$query_escaped')
+            ORDER BY g.label COLLATE NOCASE ASC
+            LIMIT $limit;
+        ")
+    fi
+    
+    if [ -z "$result" ]; then
+        echo "No tags found matching '$query'"
+        return 0
+    fi
+    
+    echo "Tags matching '$query':"
+    echo "======================"
+    echo "$result" | while IFS='|' read -r id label; do
+        echo "[#$id] $label"
+    done
+}
+
 tool_overview() {
     cat <<'EOF'
 WF TOOL OVERVIEW FOR AGENTIC CODING
@@ -1557,10 +2199,16 @@ wf link prompt 1 task 5
 wf list tasks urgent
 wf list threads resolved
 wf list prompts security
+wf search tasks "login bug"
+wf search artifacts "design document" --limit 5
+wf search prompts "security review"
+wf search threads "authentication"
+wf search tags "urgent"
 wf dump artifact 1 | claude "analyze this"
 wf dump prompt 1 | claude
 wf tag task 1 blocked,high
 wf update prompt 1 --content "New prompt text"
+wf migrate search
 
 WORKFLOW PATTERNS:
 Feature Development:
@@ -1584,6 +2232,15 @@ Prompt Library Management:
 - wf list prompts security
 - wf dump prompt 2 | claude "Additional context here"
 
+Full-Text Search (requires migration):
+- wf migrate search (one-time setup for existing databases)
+- wf search tasks "login authentication" --limit 10
+- wf search artifacts "design document" --limit 5
+- wf search prompts "security code review"
+- wf search threads "bug discussion oauth"
+- wf search tags "urgent" --limit 20
+- Uses BM25 ranking for relevance; searches across all text fields per entity
+
 Project Organization:
 - Use project tags: project-a,project-b
 - Filter everything: wf list tasks project-a, wf list prompts project-a
@@ -1603,6 +2260,9 @@ BEST PRACTICES:
 - Update prompts as you refine them: wf update prompt 1 --content "improved version"
 - Use stdin for quick content: pbpaste | wf add artifact - "clipboard" temp
 - From editors: :'<,'>w !wf add artifact - "buffer-content" coding
+- Enable search: wf migrate search (one-time setup for existing databases)
+- Use search to find content: wf search artifacts "authentication flow"
+- Search is especially useful for large prompt libraries and extensive artifacts
 
 PROMPT MANAGEMENT:
 - Create templates: wf add prompt "api-review.md" api,template
@@ -1656,7 +2316,16 @@ if [ $# -ge 2 ]; then
             COMMAND="tool-overview"
             shift
             ;;
+        "migrate search")
+            COMMAND="migrate-search"
+            shift
+            ;;
     esac
+fi
+
+# Handle search command separately since it has different parsing
+if [ "$1" = "search" ]; then
+    COMMAND="search"
 fi
 
 # Main command dispatch
@@ -1755,6 +2424,13 @@ case "$COMMAND" in
     "init")
         shift
         init_database "$@"
+        ;;
+    "migrate-search")
+        migrate_search
+        ;;
+    "search")
+        shift
+        search_entrypoint "$@"
         ;;
     *)
         show_help
