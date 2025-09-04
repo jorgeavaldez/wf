@@ -65,6 +65,171 @@ show_help() {
     echo "  $0 init ~/my-wf.db"
 }
 
+migrate_search() {
+    echo "Running FTS5 search migration..."
+
+    # Check if SQLite has FTS5 support
+    FTS5_SUPPORT=$(sqlite3 "$DB_PATH" "PRAGMA compile_options;" 2>/dev/null | grep -c "ENABLE_FTS5" || echo "0")
+    if [ "$FTS5_SUPPORT" -eq 0 ]; then
+        echo "Error: SQLite FTS5 not available. Please install SQLite with FTS5 support."
+        echo "On macOS: brew install sqlite"
+        echo "On Ubuntu/Debian: apt-get install sqlite3"
+        exit 1
+    fi
+
+    # Ensure meta table exists
+    sqlite3 "$DB_PATH" "CREATE TABLE IF NOT EXISTS wf_meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );"
+
+    # Check if migration already applied
+    MIGRATION_APPLIED=$(sqlite3 "$DB_PATH" "SELECT value FROM wf_meta WHERE key='migration:fts_search_v1';" 2>/dev/null || echo "")
+    if [ "$MIGRATION_APPLIED" = "applied" ]; then
+        echo "FTS search migration already applied."
+        exit 0
+    fi
+
+    echo "Creating FTS tables and triggers..."
+
+    # Create FTS tables and triggers in a transaction
+    sqlite3 "$DB_PATH" <<'EOF'
+BEGIN;
+
+-- Create FTS5 virtual tables
+CREATE VIRTUAL TABLE IF NOT EXISTS fts_tasks USING fts5(note, content='tasks', content_rowid='id');
+CREATE VIRTUAL TABLE IF NOT EXISTS fts_threads USING fts5(thread_id, summary, content='amp_threads', content_rowid='rowid');
+CREATE VIRTUAL TABLE IF NOT EXISTS fts_artifacts USING fts5(filename, summary, content, content='artifacts', content_rowid='id');
+CREATE VIRTUAL TABLE IF NOT EXISTS fts_prompts USING fts5(name, description, content, content='prompts', content_rowid='id');
+CREATE VIRTUAL TABLE IF NOT EXISTS fts_tags USING fts5(label, content='tags', content_rowid='id');
+
+-- Create triggers for tasks
+CREATE TRIGGER IF NOT EXISTS tasks_ai AFTER INSERT ON tasks BEGIN
+  INSERT INTO fts_tasks(rowid, note) VALUES (new.id, new.note);
+END;
+
+CREATE TRIGGER IF NOT EXISTS tasks_ad AFTER DELETE ON tasks BEGIN
+  INSERT INTO fts_tasks(fts_tasks, rowid, note) VALUES('delete', old.id, old.note);
+END;
+
+CREATE TRIGGER IF NOT EXISTS tasks_au AFTER UPDATE ON tasks BEGIN
+  INSERT INTO fts_tasks(fts_tasks, rowid, note) VALUES('delete', old.id, old.note);
+  INSERT INTO fts_tasks(rowid, note) VALUES (new.id, new.note);
+END;
+
+-- Create triggers for threads
+CREATE TRIGGER IF NOT EXISTS amp_threads_ai AFTER INSERT ON amp_threads BEGIN
+  INSERT INTO fts_threads(rowid, thread_id, summary)
+  VALUES (new.rowid, new.thread_id, new.summary);
+END;
+
+CREATE TRIGGER IF NOT EXISTS amp_threads_ad AFTER DELETE ON amp_threads BEGIN
+  INSERT INTO fts_threads(fts_threads, rowid, thread_id, summary)
+  VALUES ('delete', old.rowid, old.thread_id, old.summary);
+END;
+
+CREATE TRIGGER IF NOT EXISTS amp_threads_au AFTER UPDATE ON amp_threads BEGIN
+  INSERT INTO fts_threads(fts_threads, rowid, thread_id, summary)
+  VALUES ('delete', old.rowid, old.thread_id, old.summary);
+  INSERT INTO fts_threads(rowid, thread_id, summary)
+  VALUES (new.rowid, new.thread_id, new.summary);
+END;
+
+-- Create triggers for artifacts
+CREATE TRIGGER IF NOT EXISTS artifacts_ai AFTER INSERT ON artifacts BEGIN
+  INSERT INTO fts_artifacts(rowid, filename, summary, content)
+  VALUES (new.id, new.filename, new.summary, new.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS artifacts_ad AFTER DELETE ON artifacts BEGIN
+  INSERT INTO fts_artifacts(fts_artifacts, rowid, filename, summary, content)
+  VALUES ('delete', old.id, old.filename, old.summary, old.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS artifacts_au AFTER UPDATE ON artifacts BEGIN
+  INSERT INTO fts_artifacts(fts_artifacts, rowid, filename, summary, content)
+  VALUES ('delete', old.id, old.filename, old.summary, old.content);
+  INSERT INTO fts_artifacts(rowid, filename, summary, content)
+  VALUES (new.id, new.filename, new.summary, new.content);
+END;
+
+-- Create triggers for prompts
+CREATE TRIGGER IF NOT EXISTS prompts_ai AFTER INSERT ON prompts BEGIN
+  INSERT INTO fts_prompts(rowid, name, description, content)
+  VALUES (new.id, new.name, new.description, new.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS prompts_ad AFTER DELETE ON prompts BEGIN
+  INSERT INTO fts_prompts(fts_prompts, rowid, name, description, content)
+  VALUES ('delete', old.id, old.name, old.description, old.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS prompts_au AFTER UPDATE ON prompts BEGIN
+  INSERT INTO fts_prompts(fts_prompts, rowid, name, description, content)
+  VALUES ('delete', old.id, old.name, old.description, old.content);
+  INSERT INTO fts_prompts(rowid, name, description, content)
+  VALUES (new.id, new.name, new.description, new.content);
+END;
+
+-- Create triggers for tags
+CREATE TRIGGER IF NOT EXISTS tags_ai AFTER INSERT ON tags BEGIN
+  INSERT INTO fts_tags(rowid, label) VALUES (new.id, new.label);
+END;
+
+CREATE TRIGGER IF NOT EXISTS tags_ad AFTER DELETE ON tags BEGIN
+  INSERT INTO fts_tags(fts_tags, rowid, label) VALUES('delete', old.id, old.label);
+END;
+
+CREATE TRIGGER IF NOT EXISTS tags_au AFTER UPDATE ON tags BEGIN
+  INSERT INTO fts_tags(fts_tags, rowid, label) VALUES('delete', old.id, old.label);
+  INSERT INTO fts_tags(rowid, label) VALUES (new.id, new.label);
+END;
+
+COMMIT;
+EOF
+
+    if [ $? -ne 0 ]; then
+        echo "Error: Failed to create FTS tables and triggers"
+        exit 1
+    fi
+
+    # Check if FTS tables are empty and backfill if needed
+    TASKS_COUNT=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM fts_tasks;" 2>/dev/null || echo "0")
+    if [ "$TASKS_COUNT" -eq 0 ]; then
+        echo "Backfilling existing data..."
+
+        sqlite3 "$DB_PATH" <<'EOF'
+BEGIN;
+-- Backfill FTS tables from existing data
+INSERT INTO fts_tasks(rowid, note) SELECT id, note FROM tasks;
+INSERT INTO fts_threads(rowid, thread_id, summary) SELECT rowid, thread_id, summary FROM amp_threads;
+INSERT INTO fts_artifacts(rowid, filename, summary, content) SELECT id, filename, summary, content FROM artifacts;
+INSERT INTO fts_prompts(rowid, name, description, content) SELECT id, name, description, content FROM prompts;
+INSERT INTO fts_tags(rowid, label) SELECT id, label FROM tags;
+COMMIT;
+EOF
+
+        if [ $? -ne 0 ]; then
+            echo "Error: Failed to backfill FTS data"
+            exit 1
+        fi
+        echo "Backfill completed successfully."
+    else
+        echo "FTS tables already contain data, skipping backfill."
+    fi
+
+    # Record migration applied and update schema version
+    sqlite3 "$DB_PATH" "
+        INSERT INTO wf_meta(key,value) VALUES('migration:fts_search_v1','applied')
+        ON CONFLICT(key) DO UPDATE SET value='applied', updated_at=CURRENT_TIMESTAMP;
+        INSERT INTO wf_meta(key,value) VALUES('schema_version','2')
+        ON CONFLICT(key) DO UPDATE SET value='2', updated_at=CURRENT_TIMESTAMP;
+    "
+
+    echo "FTS search migration completed successfully!"
+}
+
 init_database() {
     if [ $# -eq 0 ]; then
         echo "Error: Database path required"
@@ -200,6 +365,107 @@ CREATE TABLE prompt_artifact_links (
     FOREIGN KEY (prompt_id) REFERENCES prompts(id) ON DELETE CASCADE,
     FOREIGN KEY (artifact_id) REFERENCES artifacts(id) ON DELETE CASCADE
 );
+
+-- Migration/version tracking
+CREATE TABLE IF NOT EXISTS wf_meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- FTS5 virtual tables
+CREATE VIRTUAL TABLE IF NOT EXISTS fts_tasks USING fts5(note, content='tasks', content_rowid='id');
+CREATE VIRTUAL TABLE IF NOT EXISTS fts_threads USING fts5(thread_id, summary, content='amp_threads', content_rowid='rowid');
+CREATE VIRTUAL TABLE IF NOT EXISTS fts_artifacts USING fts5(filename, summary, content, content='artifacts', content_rowid='id');
+CREATE VIRTUAL TABLE IF NOT EXISTS fts_prompts USING fts5(name, description, content, content='prompts', content_rowid='id');
+CREATE VIRTUAL TABLE IF NOT EXISTS fts_tags USING fts5(label, content='tags', content_rowid='id');
+
+-- Triggers to keep FTS in sync with base tables
+-- Tasks triggers
+CREATE TRIGGER IF NOT EXISTS tasks_ai AFTER INSERT ON tasks BEGIN
+  INSERT INTO fts_tasks(rowid, note) VALUES (new.id, new.note);
+END;
+
+CREATE TRIGGER IF NOT EXISTS tasks_ad AFTER DELETE ON tasks BEGIN
+  INSERT INTO fts_tasks(fts_tasks, rowid, note) VALUES('delete', old.id, old.note);
+END;
+
+CREATE TRIGGER IF NOT EXISTS tasks_au AFTER UPDATE ON tasks BEGIN
+  INSERT INTO fts_tasks(fts_tasks, rowid, note) VALUES('delete', old.id, old.note);
+  INSERT INTO fts_tasks(rowid, note) VALUES (new.id, new.note);
+END;
+
+-- Threads triggers
+CREATE TRIGGER IF NOT EXISTS amp_threads_ai AFTER INSERT ON amp_threads BEGIN
+  INSERT INTO fts_threads(rowid, thread_id, summary)
+  VALUES (new.rowid, new.thread_id, new.summary);
+END;
+
+CREATE TRIGGER IF NOT EXISTS amp_threads_ad AFTER DELETE ON amp_threads BEGIN
+  INSERT INTO fts_threads(fts_threads, rowid, thread_id, summary)
+  VALUES ('delete', old.rowid, old.thread_id, old.summary);
+END;
+
+CREATE TRIGGER IF NOT EXISTS amp_threads_au AFTER UPDATE ON amp_threads BEGIN
+  INSERT INTO fts_threads(fts_threads, rowid, thread_id, summary)
+  VALUES ('delete', old.rowid, old.thread_id, old.summary);
+  INSERT INTO fts_threads(rowid, thread_id, summary)
+  VALUES (new.rowid, new.thread_id, new.summary);
+END;
+
+-- Artifacts triggers
+CREATE TRIGGER IF NOT EXISTS artifacts_ai AFTER INSERT ON artifacts BEGIN
+  INSERT INTO fts_artifacts(rowid, filename, summary, content)
+  VALUES (new.id, new.filename, new.summary, new.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS artifacts_ad AFTER DELETE ON artifacts BEGIN
+  INSERT INTO fts_artifacts(fts_artifacts, rowid, filename, summary, content)
+  VALUES ('delete', old.id, old.filename, old.summary, old.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS artifacts_au AFTER UPDATE ON artifacts BEGIN
+  INSERT INTO fts_artifacts(fts_artifacts, rowid, filename, summary, content)
+  VALUES ('delete', old.id, old.filename, old.summary, old.content);
+  INSERT INTO fts_artifacts(rowid, filename, summary, content)
+  VALUES (new.id, new.filename, new.summary, new.content);
+END;
+
+-- Prompts triggers
+CREATE TRIGGER IF NOT EXISTS prompts_ai AFTER INSERT ON prompts BEGIN
+  INSERT INTO fts_prompts(rowid, name, description, content)
+  VALUES (new.id, new.name, new.description, new.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS prompts_ad AFTER DELETE ON prompts BEGIN
+  INSERT INTO fts_prompts(fts_prompts, rowid, name, description, content)
+  VALUES ('delete', old.id, old.name, old.description, old.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS prompts_au AFTER UPDATE ON prompts BEGIN
+  INSERT INTO fts_prompts(fts_prompts, rowid, name, description, content)
+  VALUES ('delete', old.id, old.name, old.description, old.content);
+  INSERT INTO fts_prompts(rowid, name, description, content)
+  VALUES (new.id, new.name, new.description, new.content);
+END;
+
+-- Tags triggers
+CREATE TRIGGER IF NOT EXISTS tags_ai AFTER INSERT ON tags BEGIN
+  INSERT INTO fts_tags(rowid, label) VALUES (new.id, new.label);
+END;
+
+CREATE TRIGGER IF NOT EXISTS tags_ad AFTER DELETE ON tags BEGIN
+  INSERT INTO fts_tags(fts_tags, rowid, label) VALUES('delete', old.id, old.label);
+END;
+
+CREATE TRIGGER IF NOT EXISTS tags_au AFTER UPDATE ON tags BEGIN
+  INSERT INTO fts_tags(fts_tags, rowid, label) VALUES('delete', old.id, old.label);
+  INSERT INTO fts_tags(rowid, label) VALUES (new.id, new.label);
+END;
+
+-- Set baseline schema version for new databases
+INSERT INTO wf_meta(key,value) VALUES('schema_version','2')
+ON CONFLICT(key) DO UPDATE SET value='2', updated_at=CURRENT_TIMESTAMP;
 EOF
 
     if [ $? -eq 0 ]; then
@@ -1656,6 +1922,10 @@ if [ $# -ge 2 ]; then
             COMMAND="tool-overview"
             shift
             ;;
+        "migrate search")
+            COMMAND="migrate-search"
+            shift
+            ;;
     esac
 fi
 
@@ -1755,6 +2025,9 @@ case "$COMMAND" in
     "init")
         shift
         init_database "$@"
+        ;;
+    "migrate-search")
+        migrate_search
         ;;
     *)
         show_help
