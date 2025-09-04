@@ -94,9 +94,41 @@ sqlite3 "$DB_PATH" "INSERT INTO tasks (note) VALUES ('$TASK_NOTE_ESCAPED');"
 - Test with SQL injection payloads: `"'; DROP TABLE tasks; --"`
 - Verify data integrity is preserved and no SQL errors occur
 
+## Full-Text Search (FTS5)
+
+**Search Commands:**
+- `./wf search tasks "search terms" [--limit N]` - Search task descriptions
+- `./wf search threads "search terms" [--limit N]` - Search thread IDs and summaries
+- `./wf search artifacts "search terms" [--limit N]` - Search filenames, summaries, and content
+- `./wf search prompts "search terms" [--limit N]` - Search names, descriptions, and content
+- `./wf search tags "search terms" [--limit N]` - Search tag labels
+- `./wf migrate search` - Enable search on existing databases (one-time setup)
+
+**Search Features:**
+- BM25 relevance ranking (with fallback for older SQLite versions)
+- Snippet generation for artifacts and prompts showing match context
+- Default limit of 10 results, customizable with `--limit N`
+- Searches across all relevant text fields per entity type
+- Automatic query sanitization for FTS5 compatibility
+
+**Query Sanitization:**
+- Special characters are automatically removed from search queries to prevent FTS5 syntax errors
+- Removed characters: `' " ( ) [ ] { } ^ $ * + ? | \ ; -`
+- Example: `"it's working (test)"` becomes `"it working test"`
+- This prevents both FTS5 syntax errors and potential injection attacks
+- Use the `sanitize_fts_query()` function when implementing new search functionality
+
+**Database Schema:**
+- FTS5 virtual tables: `fts_tasks`, `fts_threads`, `fts_artifacts`, `fts_prompts`, `fts_tags`
+- Automatic triggers keep FTS tables synchronized with base tables
+- Migration tracking via `wf_meta` table with schema versioning
+- New databases (schema v2) include FTS from initialization
+- Existing databases require `./wf migrate search` to enable search
+
 ## Important Notes
 
 - Always run `make check` when you make changes to the shell script
 - The tool is designed for LLM agentic coding workflows - maintaining context across sessions
 - Database must be initialized before use with `./wf init <path>`
 - All content is stored as text with proper SQL escaping for single quotes
+- Search functionality requires SQLite with FTS5 support (available in most modern distributions)
