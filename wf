@@ -1812,11 +1812,53 @@ tag_entity() {
     done
 }
 
+sanitize_fts_query() {
+    local query="$1"
+    
+    # FTS5 doesn't handle certain characters well in MATCH queries
+    # Remove or replace problematic characters:
+    # - Remove single quotes (apostrophes)
+    # - Remove double quotes (unless we want phrase search)
+    # - Remove other FTS5 special characters that cause syntax errors
+    
+    # Remove single quotes and replace with space
+    query=$(echo "$query" | sed "s/'/ /g")
+    
+    # Remove double quotes and replace with space
+    query=$(echo "$query" | sed 's/"/ /g')
+    
+    # Remove FTS5 special characters one by one (safer than character class)
+    query=$(echo "$query" | sed 's/(/ /g')     # Remove (
+    query=$(echo "$query" | sed 's/)/ /g')     # Remove )
+    query=$(echo "$query" | sed 's/\[/ /g')    # Remove [
+    query=$(echo "$query" | sed 's/\]/ /g')    # Remove ]
+    query=$(echo "$query" | sed 's/{/ /g')     # Remove {
+    query=$(echo "$query" | sed 's/}/ /g')     # Remove }
+    query=$(echo "$query" | sed 's/\^/ /g')    # Remove ^
+    query=$(echo "$query" | sed 's/\$/ /g')    # Remove $
+    query=$(echo "$query" | sed 's/\*/ /g')    # Remove *
+    query=$(echo "$query" | sed 's/+/ /g')     # Remove +
+    query=$(echo "$query" | sed 's/?/ /g')     # Remove ?
+    query=$(echo "$query" | sed 's/|/ /g')     # Remove |
+    query=$(echo "$query" | sed 's/\\/ /g')    # Remove \
+    query=$(echo "$query" | sed 's/;/ /g')     # Remove ;
+    query=$(echo "$query" | sed 's/-/ /g')     # Remove -
+    
+    # Remove extra whitespace and trim
+    query=$(echo "$query" | sed 's/[[:space:]]\+/ /g' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
+    
+    # Escape single quotes for SQL (after FTS sanitization)
+    query=$(echo "$query" | sed "s/'/''/g")
+    
+    echo "$query"
+}
+
 search_entrypoint() {
     if [ $# -lt 2 ]; then
         echo "Error: Entity type and query required"
         echo "Usage: $0 search <entity> <query> [--limit N]"
         echo "Entities: tasks, threads, artifacts, prompts, tags"
+        echo "Note: Special characters like quotes, parentheses, etc. are automatically removed from queries"
         exit 1
     fi
 
@@ -1878,8 +1920,8 @@ search_tasks() {
     local query="$1"
     local limit="$2"
     
-    # Escape single quotes for SQL
-    local query_escaped=$(echo "$query" | sed "s/'/''/g")
+    # Sanitize query for FTS5 and escape for SQL
+    local query_escaped=$(sanitize_fts_query "$query")
     
     # Check if bm25 is available, fall back to simple ordering if not
     local bm25_test=$(sqlite3 "$DB_PATH" "SELECT bm25(fts_tasks) FROM fts_tasks LIMIT 1;" 2>/dev/null)
@@ -1931,8 +1973,8 @@ search_threads() {
     local query="$1"
     local limit="$2"
     
-    # Escape single quotes for SQL
-    local query_escaped=$(echo "$query" | sed "s/'/''/g")
+    # Sanitize query for FTS5 and escape for SQL
+    local query_escaped=$(sanitize_fts_query "$query")
     
     # Check if bm25 is available, fall back to simple ordering if not
     local bm25_test=$(sqlite3 "$DB_PATH" "SELECT bm25(fts_threads) FROM fts_threads LIMIT 1;" 2>/dev/null)
@@ -1981,8 +2023,8 @@ search_artifacts() {
     local query="$1"
     local limit="$2"
     
-    # Escape single quotes for SQL
-    local query_escaped=$(echo "$query" | sed "s/'/''/g")
+    # Sanitize query for FTS5 and escape for SQL
+    local query_escaped=$(sanitize_fts_query "$query")
     
     # Check if bm25 is available, fall back to simple ordering if not
     local bm25_test=$(sqlite3 "$DB_PATH" "SELECT bm25(fts_artifacts) FROM fts_artifacts LIMIT 1;" 2>/dev/null)
@@ -2033,8 +2075,8 @@ search_prompts() {
     local query="$1"
     local limit="$2"
     
-    # Escape single quotes for SQL
-    local query_escaped=$(echo "$query" | sed "s/'/''/g")
+    # Sanitize query for FTS5 and escape for SQL
+    local query_escaped=$(sanitize_fts_query "$query")
     
     # Check if bm25 is available, fall back to simple ordering if not
     local bm25_test=$(sqlite3 "$DB_PATH" "SELECT bm25(fts_prompts) FROM fts_prompts LIMIT 1;" 2>/dev/null)
@@ -2089,8 +2131,8 @@ search_tags() {
     local query="$1"
     local limit="$2"
     
-    # Escape single quotes for SQL
-    local query_escaped=$(echo "$query" | sed "s/'/''/g")
+    # Sanitize query for FTS5 and escape for SQL
+    local query_escaped=$(sanitize_fts_query "$query")
     
     # Check if bm25 is available, fall back to simple ordering if not
     local bm25_test=$(sqlite3 "$DB_PATH" "SELECT bm25(fts_tags) FROM fts_tags LIMIT 1;" 2>/dev/null)
