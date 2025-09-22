@@ -2,6 +2,10 @@
 
 DB_PATH="${WF_DB_PATH:-/wf.db}"
 
+sqlite_exec() {
+    sqlite3 -cmd "PRAGMA trusted_schema=ON;" "$DB_PATH" "$@"
+}
+
 show_help() {
     echo "wf - Workflow Manager CLI"
     echo "Usage:"
@@ -77,7 +81,7 @@ migrate_search() {
     echo "Running FTS5 search migration..."
 
     # Check if SQLite has FTS5 support
-    FTS5_SUPPORT=$(sqlite3 "$DB_PATH" "PRAGMA compile_options;" 2>/dev/null | grep -c "ENABLE_FTS5" || echo "0")
+    FTS5_SUPPORT=$(sqlite_exec "PRAGMA compile_options;" 2>/dev/null | grep -c "ENABLE_FTS5" || echo "0")
     if [ "$FTS5_SUPPORT" -eq 0 ]; then
         echo "Error: SQLite FTS5 not available. Please install SQLite with FTS5 support."
         echo "On macOS: brew install sqlite"
@@ -86,14 +90,14 @@ migrate_search() {
     fi
 
     # Ensure meta table exists
-    sqlite3 "$DB_PATH" "CREATE TABLE IF NOT EXISTS wf_meta (
+    sqlite_exec "CREATE TABLE IF NOT EXISTS wf_meta (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );"
 
     # Check if migration already applied
-    MIGRATION_APPLIED=$(sqlite3 "$DB_PATH" "SELECT value FROM wf_meta WHERE key='migration:fts_search_v1';" 2>/dev/null || echo "")
+    MIGRATION_APPLIED=$(sqlite_exec "SELECT value FROM wf_meta WHERE key='migration:fts_search_v1';" 2>/dev/null || echo "")
     if [ "$MIGRATION_APPLIED" = "applied" ]; then
         echo "FTS search migration already applied."
         exit 0
@@ -102,7 +106,7 @@ migrate_search() {
     echo "Creating FTS tables and triggers..."
 
     # Create FTS tables and triggers in a transaction
-    sqlite3 "$DB_PATH" <<'EOF'
+    sqlite_exec <<'EOF'
 BEGIN;
 
 -- Create FTS5 virtual tables
@@ -203,11 +207,11 @@ EOF
     fi
 
     # Check if FTS tables are empty and backfill if needed
-    TASKS_COUNT=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM fts_tasks;" 2>/dev/null || echo "0")
+    TASKS_COUNT=$(sqlite_exec "SELECT COUNT(*) FROM fts_tasks;" 2>/dev/null || echo "0")
     if [ "$TASKS_COUNT" -eq 0 ]; then
         echo "Backfilling existing data..."
 
-        sqlite3 "$DB_PATH" <<'EOF'
+        sqlite_exec <<'EOF'
 BEGIN;
 -- Backfill FTS tables from existing data
 INSERT INTO fts_tasks(rowid, note) SELECT id, note FROM tasks;
@@ -235,7 +239,7 @@ EOF
     fi
 
     # Record migration applied and update schema version
-    sqlite3 "$DB_PATH" "
+    sqlite_exec "
         INSERT INTO wf_meta(key,value) VALUES('migration:fts_search_v1','applied')
         ON CONFLICT(key) DO UPDATE SET value='applied', updated_at=CURRENT_TIMESTAMP;
         INSERT INTO wf_meta(key,value) VALUES('schema_version','2')
@@ -273,7 +277,7 @@ init_database() {
     echo "Creating new database at: $NEW_DB_PATH"
 
     # Create all the tables with the same schema as the existing database
-    sqlite3 "$NEW_DB_PATH" <<'EOF'
+    sqlite3 -cmd "PRAGMA trusted_schema=ON;" "$NEW_DB_PATH" <<'EOF'
 -- Core tables
 CREATE TABLE amp_threads (
     thread_id TEXT PRIMARY KEY NOT NULL, 
@@ -511,7 +515,7 @@ add_task() {
     TASK_NOTE_ESCAPED=$(echo "$TASK_NOTE" | sed "s/'/''/g")
 
     # Insert the task and get its ID
-    TASK_ID=$(sqlite3 "$DB_PATH" "INSERT INTO tasks (note) VALUES ('$TASK_NOTE_ESCAPED'); SELECT last_insert_rowid();")
+    TASK_ID=$(sqlite_exec "INSERT INTO tasks (note) VALUES ('$TASK_NOTE_ESCAPED'); SELECT last_insert_rowid();")
 
     echo "Added task #$TASK_ID: $TASK_NOTE"
 
@@ -526,13 +530,13 @@ add_task() {
             tag_escaped=$(echo "$tag" | sed "s/'/''/g")
 
             # Insert tag if it doesn't exist, get its ID
-            TAG_ID=$(sqlite3 "$DB_PATH" "
+            TAG_ID=$(sqlite_exec "
                 INSERT OR IGNORE INTO tags (label) VALUES ('$tag_escaped');
                 SELECT id FROM tags WHERE label = '$tag_escaped';
             ")
 
             # Link task to tag
-            sqlite3 "$DB_PATH" "INSERT OR IGNORE INTO task_tags (task_id, tag_id) VALUES ($TASK_ID, $TAG_ID);"
+            sqlite_exec "INSERT OR IGNORE INTO task_tags (task_id, tag_id) VALUES ($TASK_ID, $TAG_ID);"
             echo "  Tagged with: $tag"
         done
     fi
@@ -548,17 +552,17 @@ delete_task() {
     TASK_ID="$1"
 
     # Check if task exists
-    TASK_EXISTS=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM tasks WHERE id = $TASK_ID;")
+    TASK_EXISTS=$(sqlite_exec "SELECT COUNT(*) FROM tasks WHERE id = $TASK_ID;")
     if [ "$TASK_EXISTS" -eq 0 ]; then
         echo "Error: Task #$TASK_ID not found"
         exit 1
     fi
 
     # Get task description for confirmation
-    TASK_NOTE=$(sqlite3 "$DB_PATH" "SELECT note FROM tasks WHERE id = $TASK_ID;")
+    TASK_NOTE=$(sqlite_exec "SELECT note FROM tasks WHERE id = $TASK_ID;")
 
     # Delete the task (CASCADE will handle related records)
-    sqlite3 "$DB_PATH" "DELETE FROM tasks WHERE id = $TASK_ID;"
+    sqlite_exec "DELETE FROM tasks WHERE id = $TASK_ID;"
 
     echo "Deleted task #$TASK_ID: $TASK_NOTE"
 }
@@ -580,7 +584,7 @@ add_thread() {
     SUMMARY_ESCAPED=$(echo "$SUMMARY" | sed "s/'/''/g")
 
     # Insert the thread
-    sqlite3 "$DB_PATH" "INSERT OR REPLACE INTO amp_threads (thread_id, summary, resolved) VALUES ('$THREAD_ID_ESCAPED', '$SUMMARY_ESCAPED', $RESOLVED);"
+    sqlite_exec "INSERT OR REPLACE INTO amp_threads (thread_id, summary, resolved) VALUES ('$THREAD_ID_ESCAPED', '$SUMMARY_ESCAPED', $RESOLVED);"
 
     echo "Added thread $THREAD_ID: $SUMMARY (resolved: $RESOLVED)"
 
@@ -595,13 +599,13 @@ add_thread() {
             tag_escaped=$(echo "$tag" | sed "s/'/''/g")
 
             # Insert tag if it doesn't exist, get its ID
-            TAG_ID=$(sqlite3 "$DB_PATH" "
+            TAG_ID=$(sqlite_exec "
                 INSERT OR IGNORE INTO tags (label) VALUES ('$tag_escaped');
                 SELECT id FROM tags WHERE label = '$tag_escaped';
             ")
 
             # Link thread to tag
-            sqlite3 "$DB_PATH" "INSERT OR IGNORE INTO thread_tags (thread_id, tag_id) VALUES ('$THREAD_ID_ESCAPED', $TAG_ID);"
+            sqlite_exec "INSERT OR IGNORE INTO thread_tags (thread_id, tag_id) VALUES ('$THREAD_ID_ESCAPED', $TAG_ID);"
             echo "  Tagged with: $tag"
         done
     fi
@@ -617,7 +621,7 @@ dump_task() {
     TASK_ID="$1"
 
     # Get task with tags
-    RESULT=$(sqlite3 "$DB_PATH" "
+    RESULT=$(sqlite_exec "
         SELECT t.id, t.note, GROUP_CONCAT(g.label) as tags
         FROM tasks t
         LEFT JOIN task_tags tt ON t.id = tt.task_id
@@ -700,7 +704,7 @@ list_tasks() {
         done
 
         # Get tasks filtered by multiple tags (must have ALL specified tags)
-        RESULT=$(sqlite3 "$DB_PATH" "
+        RESULT=$(sqlite_exec "
             SELECT t.id, t.note, GROUP_CONCAT(g.label) as tags
             FROM tasks t
             LEFT JOIN task_tags tt ON t.id = tt.task_id
@@ -720,7 +724,7 @@ list_tasks() {
         echo "==============================="
     else
         # Get all tasks with tags
-        RESULT=$(sqlite3 "$DB_PATH" "
+        RESULT=$(sqlite_exec "
             SELECT t.id, t.note, GROUP_CONCAT(g.label) as tags
             FROM tasks t
             LEFT JOIN task_tags tt ON t.id = tt.task_id
@@ -763,7 +767,7 @@ show_thread() {
     THREAD_ID_ESCAPED=$(echo "$THREAD_ID" | sed "s/'/''/g")
 
     # Get thread with tags
-    RESULT=$(sqlite3 "$DB_PATH" "
+    RESULT=$(sqlite_exec "
         SELECT t.thread_id, t.summary, t.resolved, GROUP_CONCAT(g.label) as tags
         FROM amp_threads t
         LEFT JOIN thread_tags tt ON t.thread_id = tt.thread_id
@@ -847,7 +851,7 @@ list_threads() {
         done
 
         # Get threads filtered by multiple tags (must have ALL specified tags)
-        RESULT=$(sqlite3 "$DB_PATH" "
+        RESULT=$(sqlite_exec "
             SELECT t.thread_id, t.summary, t.resolved, GROUP_CONCAT(g.label) as tags
             FROM amp_threads t
             LEFT JOIN thread_tags tt ON t.thread_id = tt.thread_id
@@ -867,7 +871,7 @@ list_threads() {
         echo "=================================="
     else
         # Get all threads with tags and summaries
-        RESULT=$(sqlite3 "$DB_PATH" "
+        RESULT=$(sqlite_exec "
             SELECT t.thread_id, t.summary, t.resolved, GROUP_CONCAT(g.label) as tags
             FROM amp_threads t
             LEFT JOIN thread_tags tt ON t.thread_id = tt.thread_id
@@ -937,7 +941,8 @@ add_artifact() {
         done
 
         # Read from stdin and escape single quotes for SQL
-        CONTENT=$(cat | sed "s/'/''/g")
+        CONTENT_RAW=$(cat)
+        CONTENT=$(printf '%s' "$CONTENT_RAW" | sed "s/'/''/g")
         FILENAME=$(echo "$FILENAME" | sed "s/'/''/g")
     else
         # Parse arguments to handle --summarize flag
@@ -967,11 +972,12 @@ add_artifact() {
         FILENAME=$(basename "$FILE_PATH" | sed "s/'/''/g")
 
         # Read file content and escape single quotes for SQL
-        CONTENT=$(cat "$FILE_PATH" | sed "s/'/''/g")
+        CONTENT_RAW=$(cat "$FILE_PATH")
+        CONTENT=$(printf '%s' "$CONTENT_RAW" | sed "s/'/''/g")
     fi
 
     # Insert the artifact and get its ID
-    ARTIFACT_ID=$(sqlite3 "$DB_PATH" "INSERT INTO artifacts (filename, content) VALUES ('$FILENAME', '$CONTENT'); SELECT last_insert_rowid();")
+    ARTIFACT_ID=$(sqlite_exec "INSERT INTO artifacts (filename, content) VALUES ('$FILENAME', '$CONTENT'); SELECT last_insert_rowid();")
 
     echo "Added artifact #$ARTIFACT_ID: $FILENAME"
 
@@ -981,13 +987,23 @@ add_artifact() {
 
         # Generate summary using claude CLI with retry logic
         for attempt in 1 2; do
-            SUMMARY=$(echo "$CONTENT" | sed "s/''/'/g" | claude -p "Provide exactly one title sentence or phrase that summarizes this markdown content:")
+            CLAUDE_PROMPT=$(
+                cat <<EOF
+I have given you markdown content describing an artifact. The content is enclosed in <artifact> tags.
+<artifact>
+${CONTENT_RAW:-}
+</artifact>
+Provide exactly one title sentence or phrase that summarizes this markdown content. Return only the summary text.
+EOF
+            )
+
+            SUMMARY=$(claude -p "$CLAUDE_PROMPT")
 
             if [ $? -eq 0 ] && validate_single_line_summary "$SUMMARY"; then
                 # Escape single quotes for SQL
                 SUMMARY_ESCAPED=$(echo "$SUMMARY" | sed "s/'/''/g")
                 # Update the summary field
-                sqlite3 "$DB_PATH" "UPDATE artifacts SET summary = '$SUMMARY_ESCAPED' WHERE id = $ARTIFACT_ID;"
+                sqlite_exec "UPDATE artifacts SET summary = '$SUMMARY_ESCAPED' WHERE id = $ARTIFACT_ID;"
                 echo "  Summary: $SUMMARY"
                 break
             elif [ $? -eq 0 ]; then
@@ -1013,13 +1029,13 @@ add_artifact() {
             tag_escaped=$(echo "$tag" | sed "s/'/''/g")
 
             # Insert tag if it doesn't exist, get its ID
-            TAG_ID=$(sqlite3 "$DB_PATH" "
+            TAG_ID=$(sqlite_exec "
                 INSERT OR IGNORE INTO tags (label) VALUES ('$tag_escaped');
                 SELECT id FROM tags WHERE label = '$tag_escaped';
             ")
 
             # Link artifact to tag
-            sqlite3 "$DB_PATH" "INSERT OR IGNORE INTO artifact_tags (artifact_id, tag_id) VALUES ($ARTIFACT_ID, $TAG_ID);"
+            sqlite_exec "INSERT OR IGNORE INTO artifact_tags (artifact_id, tag_id) VALUES ($ARTIFACT_ID, $TAG_ID);"
             echo "  Tagged with: $tag"
         done
     fi
@@ -1038,11 +1054,11 @@ link_artifact() {
 
     case "$LINK_TYPE" in
         "thread")
-            sqlite3 "$DB_PATH" "INSERT OR IGNORE INTO artifact_thread_links (artifact_id, thread_id) VALUES ($ARTIFACT_ID, '$TARGET_ID');"
+            sqlite_exec "INSERT OR IGNORE INTO artifact_thread_links (artifact_id, thread_id) VALUES ($ARTIFACT_ID, '$TARGET_ID');"
             echo "Linked artifact #$ARTIFACT_ID to thread $TARGET_ID"
             ;;
         "task")
-            sqlite3 "$DB_PATH" "INSERT OR IGNORE INTO artifact_task_links (artifact_id, task_id) VALUES ($ARTIFACT_ID, $TARGET_ID);"
+            sqlite_exec "INSERT OR IGNORE INTO artifact_task_links (artifact_id, task_id) VALUES ($ARTIFACT_ID, $TARGET_ID);"
             echo "Linked artifact #$ARTIFACT_ID to task #$TARGET_ID"
             ;;
         *)
@@ -1062,7 +1078,7 @@ summarize_artifact() {
     ARTIFACT_ID="$1"
 
     # Get artifact content
-    CONTENT=$(sqlite3 "$DB_PATH" "SELECT content FROM artifacts WHERE id = $ARTIFACT_ID;")
+    CONTENT=$(sqlite_exec "SELECT content FROM artifacts WHERE id = $ARTIFACT_ID;")
 
     if [ -z "$CONTENT" ]; then
         echo "Artifact #$ARTIFACT_ID not found"
@@ -1073,13 +1089,23 @@ summarize_artifact() {
 
     # Generate summary using claude CLI with retry logic
     for attempt in 1 2; do
-        SUMMARY=$(echo "$CONTENT" | claude -p "Provide exactly one title sentence or phrase that summarizes this markdown content:")
+        CLAUDE_PROMPT=$(
+            cat <<EOF
+I have given you markdown content describing an artifact. The content is enclosed in <artifact> tags.
+<artifact>
+${CONTENT:-}
+</artifact>
+Provide exactly one title sentence or phrase that summarizes this markdown content. Return only the summary text.
+EOF
+        )
+
+        SUMMARY=$(claude -p "$CLAUDE_PROMPT")
 
         if [ $? -eq 0 ] && validate_single_line_summary "$SUMMARY"; then
             # Escape single quotes for SQL
             SUMMARY_ESCAPED=$(echo "$SUMMARY" | sed "s/'/''/g")
             # Update the summary field
-            sqlite3 "$DB_PATH" "UPDATE artifacts SET summary = '$SUMMARY_ESCAPED' WHERE id = $ARTIFACT_ID;"
+            sqlite_exec "UPDATE artifacts SET summary = '$SUMMARY_ESCAPED' WHERE id = $ARTIFACT_ID;"
             echo "Summary updated for artifact #$ARTIFACT_ID"
             echo "Summary: $SUMMARY"
             return 0
@@ -1104,7 +1130,7 @@ dump_artifact() {
     ARTIFACT_ID="$1"
 
     # Get and output raw artifact content
-    CONTENT=$(sqlite3 "$DB_PATH" "SELECT content FROM artifacts WHERE id = $ARTIFACT_ID;")
+    CONTENT=$(sqlite_exec "SELECT content FROM artifacts WHERE id = $ARTIFACT_ID;")
 
     if [ -z "$CONTENT" ]; then
         echo "Artifact #$ARTIFACT_ID not found" >&2
@@ -1124,17 +1150,17 @@ delete_artifact() {
     ARTIFACT_ID="$1"
 
     # Check if artifact exists
-    ARTIFACT_EXISTS=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM artifacts WHERE id = $ARTIFACT_ID;")
+    ARTIFACT_EXISTS=$(sqlite_exec "SELECT COUNT(*) FROM artifacts WHERE id = $ARTIFACT_ID;")
     if [ "$ARTIFACT_EXISTS" -eq 0 ]; then
         echo "Error: Artifact #$ARTIFACT_ID not found"
         exit 1
     fi
 
     # Get artifact filename for confirmation
-    ARTIFACT_FILENAME=$(sqlite3 "$DB_PATH" "SELECT filename FROM artifacts WHERE id = $ARTIFACT_ID;")
+    ARTIFACT_FILENAME=$(sqlite_exec "SELECT filename FROM artifacts WHERE id = $ARTIFACT_ID;")
 
     # Delete the artifact (CASCADE will handle related records)
-    sqlite3 "$DB_PATH" "DELETE FROM artifacts WHERE id = $ARTIFACT_ID;"
+    sqlite_exec "DELETE FROM artifacts WHERE id = $ARTIFACT_ID;"
 
     echo "Deleted artifact #$ARTIFACT_ID: $ARTIFACT_FILENAME"
 }
@@ -1197,7 +1223,7 @@ list_artifacts() {
         done
 
         # Get artifacts filtered by multiple tags (must have ALL specified tags)
-        RESULT=$(sqlite3 "$DB_PATH" "
+        RESULT=$(sqlite_exec "
             SELECT a.id, a.filename, a.summary, GROUP_CONCAT(g.label) as tags, a.created_at
             FROM artifacts a
             LEFT JOIN artifact_tags at ON a.id = at.artifact_id
@@ -1217,7 +1243,7 @@ list_artifacts() {
         echo "===================================="
     else
         # Get all artifacts with tags
-        RESULT=$(sqlite3 "$DB_PATH" "
+        RESULT=$(sqlite_exec "
             SELECT a.id, a.filename, a.summary, GROUP_CONCAT(g.label) as tags, a.created_at
             FROM artifacts a
             LEFT JOIN artifact_tags at ON a.id = at.artifact_id
@@ -1291,7 +1317,8 @@ add_prompt() {
         done
 
         # Read from stdin and escape single quotes for SQL
-        PROMPT_CONTENT=$(cat | sed "s/'/''/g")
+        PROMPT_CONTENT_RAW=$(cat)
+        PROMPT_CONTENT=$(printf '%s' "$PROMPT_CONTENT_RAW" | sed "s/'/''/g")
         PROMPT_NAME=$(echo "$PROMPT_NAME" | sed "s/'/''/g")
     else
         # Parse arguments to handle --summarize flag
@@ -1321,11 +1348,12 @@ add_prompt() {
         PROMPT_NAME=$(basename "$FILE_PATH" | sed "s/'/''/g")
 
         # Read file content and escape single quotes for SQL
-        PROMPT_CONTENT=$(cat "$FILE_PATH" | sed "s/'/''/g")
+        PROMPT_CONTENT_RAW=$(cat "$FILE_PATH")
+        PROMPT_CONTENT=$(printf '%s' "$PROMPT_CONTENT_RAW" | sed "s/'/''/g")
     fi
 
     # Insert the prompt and get its ID
-    PROMPT_ID=$(sqlite3 "$DB_PATH" "INSERT INTO prompts (name, content) VALUES ('$PROMPT_NAME', '$PROMPT_CONTENT'); SELECT last_insert_rowid();")
+    PROMPT_ID=$(sqlite_exec "INSERT INTO prompts (name, content) VALUES ('$PROMPT_NAME', '$PROMPT_CONTENT'); SELECT last_insert_rowid();")
 
     echo "Added prompt #$PROMPT_ID: $PROMPT_NAME"
 
@@ -1335,13 +1363,23 @@ add_prompt() {
 
         # Generate summary using claude CLI with retry logic
         for attempt in 1 2; do
-            SUMMARY=$(echo "$PROMPT_CONTENT" | sed "s/''/'/g" | claude -p "I have given you a prompt I wrote for another agent as markdown. Provide exactly one title sentence or phrase that summarizes this markdown content:")
+            CLAUDE_PROMPT=$(
+                cat <<EOF
+I have given you a prompt I wrote for another agent as markdown. The prompt is enclosed in <prompt> tags.
+<prompt>
+${PROMPT_CONTENT_RAW:-}
+</prompt>
+Provide exactly one title sentence or phrase that summarizes this markdown content. Return only the summary text.
+EOF
+            )
+
+            SUMMARY=$(claude -p "$CLAUDE_PROMPT")
 
             if [ $? -eq 0 ] && validate_single_line_summary "$SUMMARY"; then
                 # Escape single quotes for SQL
                 SUMMARY_ESCAPED=$(echo "$SUMMARY" | sed "s/'/''/g")
                 # Update the description field with the summary
-                sqlite3 "$DB_PATH" "UPDATE prompts SET description = '$SUMMARY_ESCAPED', updated_at = CURRENT_TIMESTAMP WHERE id = $PROMPT_ID;"
+                sqlite_exec "UPDATE prompts SET description = '$SUMMARY_ESCAPED', updated_at = CURRENT_TIMESTAMP WHERE id = $PROMPT_ID;"
                 echo "  Summary: $SUMMARY"
                 break
             elif [ $? -eq 0 ]; then
@@ -1367,13 +1405,13 @@ add_prompt() {
             tag_escaped=$(echo "$tag" | sed "s/'/''/g")
 
             # Insert tag if it doesn't exist, get its ID
-            TAG_ID=$(sqlite3 "$DB_PATH" "
+            TAG_ID=$(sqlite_exec "
                 INSERT OR IGNORE INTO tags (label) VALUES ('$tag_escaped');
                 SELECT id FROM tags WHERE label = '$tag_escaped';
             ")
 
             # Link prompt to tag
-            sqlite3 "$DB_PATH" "INSERT OR IGNORE INTO prompt_tags (prompt_id, tag_id) VALUES ($PROMPT_ID, $TAG_ID);"
+            sqlite_exec "INSERT OR IGNORE INTO prompt_tags (prompt_id, tag_id) VALUES ($PROMPT_ID, $TAG_ID);"
             echo "  Tagged with: $tag"
         done
     fi
@@ -1389,7 +1427,7 @@ show_prompt() {
     PROMPT_ID="$1"
 
     # Get prompt with tags
-    RESULT=$(sqlite3 "$DB_PATH" "
+    RESULT=$(sqlite_exec "
         SELECT p.id, p.name, p.description, p.content, GROUP_CONCAT(g.label) as tags, p.created_at, p.updated_at
         FROM prompts p
         LEFT JOIN prompt_tags pt ON p.id = pt.prompt_id
@@ -1477,7 +1515,7 @@ list_prompts() {
         done
 
         # Get prompts filtered by multiple tags (must have ALL specified tags)
-        RESULT=$(sqlite3 "$DB_PATH" "
+        RESULT=$(sqlite_exec "
             SELECT p.id, p.name, SUBSTR(p.description, 1, INSTR(p.description || char(10), char(10)) - 1) as description, GROUP_CONCAT(g.label) as tags, p.created_at
             FROM prompts p
             LEFT JOIN prompt_tags pt ON p.id = pt.prompt_id
@@ -1497,7 +1535,7 @@ list_prompts() {
         echo "================================="
     else
         # Get all prompts with tags
-        RESULT=$(sqlite3 "$DB_PATH" "
+        RESULT=$(sqlite_exec "
             SELECT p.id, p.name, SUBSTR(p.description, 1, INSTR(p.description || char(10), char(10)) - 1) as description, GROUP_CONCAT(g.label) as tags, p.created_at
             FROM prompts p
             LEFT JOIN prompt_tags pt ON p.id = pt.prompt_id
@@ -1542,7 +1580,7 @@ update_prompt() {
     shift
 
     # Check if prompt exists
-    PROMPT_EXISTS=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM prompts WHERE id = $PROMPT_ID;")
+    PROMPT_EXISTS=$(sqlite_exec "SELECT COUNT(*) FROM prompts WHERE id = $PROMPT_ID;")
     if [ "$PROMPT_EXISTS" -eq 0 ]; then
         echo "Error: Prompt #$PROMPT_ID not found"
         exit 1
@@ -1557,7 +1595,7 @@ update_prompt() {
                     exit 1
                 fi
                 NAME_ESCAPED=$(echo "$2" | sed "s/'/''/g")
-                sqlite3 "$DB_PATH" "UPDATE prompts SET name = '$NAME_ESCAPED', updated_at = CURRENT_TIMESTAMP WHERE id = $PROMPT_ID;"
+                sqlite_exec "UPDATE prompts SET name = '$NAME_ESCAPED', updated_at = CURRENT_TIMESTAMP WHERE id = $PROMPT_ID;"
                 echo "Updated name for prompt #$PROMPT_ID"
                 shift 2
                 ;;
@@ -1567,13 +1605,13 @@ update_prompt() {
                     exit 1
                 fi
                 CONTENT_ESCAPED=$(echo "$2" | sed "s/'/''/g")
-                sqlite3 "$DB_PATH" "UPDATE prompts SET content = '$CONTENT_ESCAPED', updated_at = CURRENT_TIMESTAMP WHERE id = $PROMPT_ID;"
+                sqlite_exec "UPDATE prompts SET content = '$CONTENT_ESCAPED', updated_at = CURRENT_TIMESTAMP WHERE id = $PROMPT_ID;"
                 echo "Updated content for prompt #$PROMPT_ID"
                 shift 2
                 ;;
             --description)
                 DESCRIPTION_ESCAPED=$(echo "$2" | sed "s/'/''/g")
-                sqlite3 "$DB_PATH" "UPDATE prompts SET description = '$DESCRIPTION_ESCAPED', updated_at = CURRENT_TIMESTAMP WHERE id = $PROMPT_ID;"
+                sqlite_exec "UPDATE prompts SET description = '$DESCRIPTION_ESCAPED', updated_at = CURRENT_TIMESTAMP WHERE id = $PROMPT_ID;"
                 echo "Updated description for prompt #$PROMPT_ID"
                 shift 2
                 ;;
@@ -1596,17 +1634,17 @@ delete_prompt() {
     PROMPT_ID="$1"
 
     # Check if prompt exists
-    PROMPT_EXISTS=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM prompts WHERE id = $PROMPT_ID;")
+    PROMPT_EXISTS=$(sqlite_exec "SELECT COUNT(*) FROM prompts WHERE id = $PROMPT_ID;")
     if [ "$PROMPT_EXISTS" -eq 0 ]; then
         echo "Error: Prompt #$PROMPT_ID not found"
         exit 1
     fi
 
     # Get prompt name for confirmation
-    PROMPT_NAME=$(sqlite3 "$DB_PATH" "SELECT name FROM prompts WHERE id = $PROMPT_ID;")
+    PROMPT_NAME=$(sqlite_exec "SELECT name FROM prompts WHERE id = $PROMPT_ID;")
 
     # Delete the prompt (CASCADE will handle related records)
-    sqlite3 "$DB_PATH" "DELETE FROM prompts WHERE id = $PROMPT_ID;"
+    sqlite_exec "DELETE FROM prompts WHERE id = $PROMPT_ID;"
 
     echo "Deleted prompt #$PROMPT_ID: $PROMPT_NAME"
 }
@@ -1621,7 +1659,7 @@ summarize_prompt() {
     PROMPT_ID="$1"
 
     # Get prompt content
-    CONTENT=$(sqlite3 "$DB_PATH" "SELECT content FROM prompts WHERE id = $PROMPT_ID;")
+    CONTENT=$(sqlite_exec "SELECT content FROM prompts WHERE id = $PROMPT_ID;")
 
     if [ -z "$CONTENT" ]; then
         echo "Prompt #$PROMPT_ID not found"
@@ -1632,13 +1670,23 @@ summarize_prompt() {
 
     # Generate summary using claude CLI with retry logic
     for attempt in 1 2; do
-        SUMMARY=$(echo "$CONTENT" | claude -p "I have given you a prompt I wrote for another agent as markdown. Provide exactly one title sentence or phrase that summarizes this markdown content:")
+        CLAUDE_PROMPT=$(
+            cat <<EOF
+I have given you a prompt I wrote for another agent as markdown. The prompt is enclosed in <prompt> tags.
+<prompt>
+${CONTENT:-}
+</prompt>
+Provide exactly one title sentence or phrase that summarizes this markdown content. Return only the summary text.
+EOF
+        )
+
+        SUMMARY=$(claude -p "$CLAUDE_PROMPT")
 
         if [ $? -eq 0 ] && validate_single_line_summary "$SUMMARY"; then
             # Escape single quotes for SQL
             SUMMARY_ESCAPED=$(echo "$SUMMARY" | sed "s/'/''/g")
             # Update the description field with the summary
-            sqlite3 "$DB_PATH" "UPDATE prompts SET description = '$SUMMARY_ESCAPED', updated_at = CURRENT_TIMESTAMP WHERE id = $PROMPT_ID;"
+            sqlite_exec "UPDATE prompts SET description = '$SUMMARY_ESCAPED', updated_at = CURRENT_TIMESTAMP WHERE id = $PROMPT_ID;"
             echo "Summary updated for prompt #$PROMPT_ID"
             echo "Summary: $SUMMARY"
             return 0
@@ -1663,7 +1711,7 @@ dump_prompt() {
     PROMPT_ID="$1"
 
     # Get and output raw prompt content
-    CONTENT=$(sqlite3 "$DB_PATH" "SELECT content FROM prompts WHERE id = $PROMPT_ID;")
+    CONTENT=$(sqlite_exec "SELECT content FROM prompts WHERE id = $PROMPT_ID;")
 
     if [ -z "$CONTENT" ]; then
         echo "Prompt #$PROMPT_ID not found" >&2
@@ -1686,15 +1734,15 @@ link_prompt() {
 
     case "$LINK_TYPE" in
         "task")
-            sqlite3 "$DB_PATH" "INSERT OR IGNORE INTO prompt_task_links (prompt_id, task_id) VALUES ($PROMPT_ID, $TARGET_ID);"
+            sqlite_exec "INSERT OR IGNORE INTO prompt_task_links (prompt_id, task_id) VALUES ($PROMPT_ID, $TARGET_ID);"
             echo "Linked prompt #$PROMPT_ID to task #$TARGET_ID"
             ;;
         "thread")
-            sqlite3 "$DB_PATH" "INSERT OR IGNORE INTO prompt_thread_links (prompt_id, thread_id) VALUES ($PROMPT_ID, '$TARGET_ID');"
+            sqlite_exec "INSERT OR IGNORE INTO prompt_thread_links (prompt_id, thread_id) VALUES ($PROMPT_ID, '$TARGET_ID');"
             echo "Linked prompt #$PROMPT_ID to thread $TARGET_ID"
             ;;
         "artifact")
-            sqlite3 "$DB_PATH" "INSERT OR IGNORE INTO prompt_artifact_links (prompt_id, artifact_id) VALUES ($PROMPT_ID, $TARGET_ID);"
+            sqlite_exec "INSERT OR IGNORE INTO prompt_artifact_links (prompt_id, artifact_id) VALUES ($PROMPT_ID, $TARGET_ID);"
             echo "Linked prompt #$PROMPT_ID to artifact #$TARGET_ID"
             ;;
         *)
@@ -1740,7 +1788,7 @@ tag_entity() {
     # Validate entity type and check if entity exists
     case "$ENTITY_TYPE" in
         "task")
-            ENTITY_EXISTS=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM tasks WHERE id = $ENTITY_ID;")
+            ENTITY_EXISTS=$(sqlite_exec "SELECT COUNT(*) FROM tasks WHERE id = $ENTITY_ID;")
             if [ "$ENTITY_EXISTS" -eq 0 ]; then
                 echo "Error: Task #$ENTITY_ID not found"
                 exit 1
@@ -1750,7 +1798,7 @@ tag_entity() {
             ;;
         "thread")
             ENTITY_ID_ESCAPED=$(echo "$ENTITY_ID" | sed "s/'/''/g")
-            ENTITY_EXISTS=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM amp_threads WHERE thread_id = '$ENTITY_ID_ESCAPED';")
+            ENTITY_EXISTS=$(sqlite_exec "SELECT COUNT(*) FROM amp_threads WHERE thread_id = '$ENTITY_ID_ESCAPED';")
             if [ "$ENTITY_EXISTS" -eq 0 ]; then
                 echo "Error: Thread $ENTITY_ID not found"
                 exit 1
@@ -1759,7 +1807,7 @@ tag_entity() {
             FOREIGN_KEY="thread_id"
             ;;
         "artifact")
-            ENTITY_EXISTS=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM artifacts WHERE id = $ENTITY_ID;")
+            ENTITY_EXISTS=$(sqlite_exec "SELECT COUNT(*) FROM artifacts WHERE id = $ENTITY_ID;")
             if [ "$ENTITY_EXISTS" -eq 0 ]; then
                 echo "Error: Artifact #$ENTITY_ID not found"
                 exit 1
@@ -1768,7 +1816,7 @@ tag_entity() {
             FOREIGN_KEY="artifact_id"
             ;;
         "prompt")
-            ENTITY_EXISTS=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM prompts WHERE id = $ENTITY_ID;")
+            ENTITY_EXISTS=$(sqlite_exec "SELECT COUNT(*) FROM prompts WHERE id = $ENTITY_ID;")
             if [ "$ENTITY_EXISTS" -eq 0 ]; then
                 echo "Error: Prompt #$ENTITY_ID not found"
                 exit 1
@@ -1794,7 +1842,7 @@ tag_entity() {
         tag_escaped=$(echo "$tag" | sed "s/'/''/g")
 
         # Insert tag if it doesn't exist, get its ID
-        TAG_ID=$(sqlite3 "$DB_PATH" "
+        TAG_ID=$(sqlite_exec "
             INSERT OR IGNORE INTO tags (label) VALUES ('$tag_escaped');
             SELECT id FROM tags WHERE label = '$tag_escaped';
         ")
@@ -1802,10 +1850,10 @@ tag_entity() {
         # Link entity to tag based on type
         if [ "$ENTITY_TYPE" = "thread" ]; then
             # Thread IDs are text, need quotes and escaping
-            sqlite3 "$DB_PATH" "INSERT OR IGNORE INTO $JUNCTION_TABLE ($FOREIGN_KEY, tag_id) VALUES ('$ENTITY_ID_ESCAPED', $TAG_ID);"
+            sqlite_exec "INSERT OR IGNORE INTO $JUNCTION_TABLE ($FOREIGN_KEY, tag_id) VALUES ('$ENTITY_ID_ESCAPED', $TAG_ID);"
         else
             # Task, artifact, and prompt IDs are integers, no quotes
-            sqlite3 "$DB_PATH" "INSERT OR IGNORE INTO $JUNCTION_TABLE ($FOREIGN_KEY, tag_id) VALUES ($ENTITY_ID, $TAG_ID);"
+            sqlite_exec "INSERT OR IGNORE INTO $JUNCTION_TABLE ($FOREIGN_KEY, tag_id) VALUES ($ENTITY_ID, $TAG_ID);"
         fi
 
         echo "  Tagged with: $tag"
@@ -1814,42 +1862,39 @@ tag_entity() {
 
 sanitize_fts_query() {
     local query="$1"
-    
+
     # FTS5 doesn't handle certain characters well in MATCH queries
     # Remove or replace problematic characters:
     # - Remove single quotes (apostrophes)
     # - Remove double quotes (unless we want phrase search)
     # - Remove other FTS5 special characters that cause syntax errors
-    
+
     # Remove single quotes and replace with space
     query=$(echo "$query" | sed "s/'/ /g")
-    
+
     # Remove double quotes and replace with space
     query=$(echo "$query" | sed 's/"/ /g')
-    
+
     # Remove FTS5 special characters one by one (safer than character class)
-    query=$(echo "$query" | sed 's/(/ /g')     # Remove (
-    query=$(echo "$query" | sed 's/)/ /g')     # Remove )
-    query=$(echo "$query" | sed 's/\[/ /g')    # Remove [
-    query=$(echo "$query" | sed 's/\]/ /g')    # Remove ]
-    query=$(echo "$query" | sed 's/{/ /g')     # Remove {
-    query=$(echo "$query" | sed 's/}/ /g')     # Remove }
-    query=$(echo "$query" | sed 's/\^/ /g')    # Remove ^
-    query=$(echo "$query" | sed 's/\$/ /g')    # Remove $
-    query=$(echo "$query" | sed 's/\*/ /g')    # Remove *
-    query=$(echo "$query" | sed 's/+/ /g')     # Remove +
-    query=$(echo "$query" | sed 's/?/ /g')     # Remove ?
-    query=$(echo "$query" | sed 's/|/ /g')     # Remove |
-    query=$(echo "$query" | sed 's/\\/ /g')    # Remove \
-    query=$(echo "$query" | sed 's/;/ /g')     # Remove ;
-    query=$(echo "$query" | sed 's/-/ /g')     # Remove -
-    
+    query=$(echo "$query" | sed 's/(/ /g')  # Remove (
+    query=$(echo "$query" | sed 's/)/ /g')  # Remove )
+    query=$(echo "$query" | sed 's/\[/ /g') # Remove [
+    query=$(echo "$query" | sed 's/\]/ /g') # Remove ]
+    query=$(echo "$query" | sed 's/{/ /g')  # Remove {
+    query=$(echo "$query" | sed 's/}/ /g')  # Remove }
+    query=$(echo "$query" | sed 's/\^/ /g') # Remove ^
+    query=$(echo "$query" | sed 's/\$/ /g') # Remove $
+    query=$(echo "$query" | sed 's/\*/ /g') # Remove *
+    query=$(echo "$query" | sed 's/+/ /g')  # Remove +
+    query=$(echo "$query" | sed 's/?/ /g')  # Remove ?
+    query=$(echo "$query" | sed 's/|/ /g')  # Remove |
+    query=$(echo "$query" | sed 's/\\/ /g') # Remove backslash
+    query=$(echo "$query" | sed 's/;/ /g')  # Remove ;
+    query=$(echo "$query" | sed 's/-/ /g')  # Remove -
+
     # Remove extra whitespace and trim
     query=$(echo "$query" | sed 's/[[:space:]]\+/ /g' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
-    
-    # Escape single quotes for SQL (after FTS sanitization)
-    query=$(echo "$query" | sed "s/'/''/g")
-    
+
     echo "$query"
 }
 
@@ -1865,9 +1910,9 @@ search_entrypoint() {
     ENTITY_TYPE="$1"
     QUERY="$2"
     shift 2
-    
+
     # Parse --limit option
-    LIMIT="10"  # default limit
+    LIMIT="10" # default limit
     while [ $# -gt 0 ]; do
         case "$1" in
             "--limit")
@@ -1884,14 +1929,14 @@ search_entrypoint() {
                 ;;
         esac
     done
-    
+
     # Check if FTS tables exist
-    FTS_TABLE_EXISTS=$(sqlite3 "$DB_PATH" "SELECT name FROM sqlite_master WHERE type='table' AND name='fts_tasks';" 2>/dev/null || echo "")
+    FTS_TABLE_EXISTS=$(sqlite_exec "SELECT name FROM sqlite_master WHERE type='table' AND name='fts_tasks';" 2>/dev/null || echo "")
     if [ -z "$FTS_TABLE_EXISTS" ]; then
         echo "Search not initialized. Run: wf migrate search"
         exit 1
     fi
-    
+
     # Route to appropriate search function
     case "$ENTITY_TYPE" in
         "tasks")
@@ -1919,49 +1964,61 @@ search_entrypoint() {
 search_tasks() {
     local query="$1"
     local limit="$2"
-    
-    # Sanitize query for FTS5 and escape for SQL
-    local query_escaped=$(sanitize_fts_query "$query")
-    
+
+    # Sanitize query for FTS5
+    local query_sanitized=$(sanitize_fts_query "$query")
+
+    if [ -z "$query_sanitized" ]; then
+        echo "Error: Query must contain searchable text"
+        return 1
+    fi
+
     # Check if bm25 is available, fall back to simple ordering if not
-    local bm25_test=$(sqlite3 "$DB_PATH" "SELECT bm25(fts_tasks) FROM fts_tasks LIMIT 1;" 2>/dev/null)
+    local bm25_test=$(sqlite_exec "SELECT bm25(fts_tasks) FROM fts_tasks LIMIT 1;" 2>/dev/null)
     local bm25_available=0
     if [ $? -eq 0 ] && [ -n "$bm25_test" ]; then
         bm25_available=1
     fi
-    
-    local order_clause
-    if [ "$bm25_available" -eq 1 ]; then
-        order_clause="ORDER BY bm25(f) ASC, t.id DESC"
-    else
-        echo "Warning: bm25() unavailable; using simple ordering"
-        order_clause="ORDER BY t.id DESC"
-    fi
-    
+
     local result
     if [ "$bm25_available" -eq 1 ]; then
-        result=$(sqlite3 "$DB_PATH" "
-            SELECT t.id, t.note
-            FROM tasks t
-            JOIN (SELECT rowid, bm25(fts_tasks) as score FROM fts_tasks WHERE fts_tasks MATCH '$query_escaped') fts ON t.id = fts.rowid
-            ORDER BY fts.score ASC, t.id DESC
-            LIMIT $limit;
-        ")
+        result=$(
+            sqlite_exec <<EOF
+.parameter init
+.parameter set @query '$query_sanitized'
+SELECT t.id, t.note
+FROM tasks t
+JOIN (
+    SELECT rowid, bm25(fts_tasks) AS score
+    FROM fts_tasks
+    WHERE fts_tasks MATCH @query
+) fts ON t.id = fts.rowid
+ORDER BY fts.score ASC, t.id DESC
+LIMIT $limit;
+EOF
+        )
     else
-        result=$(sqlite3 "$DB_PATH" "
-            SELECT t.id, t.note
-            FROM tasks t
-            WHERE t.id IN (SELECT rowid FROM fts_tasks WHERE fts_tasks MATCH '$query_escaped')
-            ORDER BY t.id DESC
-            LIMIT $limit;
-        ")
+        echo "Warning: bm25() unavailable; using simple ordering"
+        result=$(
+            sqlite_exec <<EOF
+.parameter init
+.parameter set @query '$query_sanitized'
+SELECT t.id, t.note
+FROM tasks t
+WHERE t.id IN (
+    SELECT rowid FROM fts_tasks WHERE fts_tasks MATCH @query
+)
+ORDER BY t.id DESC
+LIMIT $limit;
+EOF
+        )
     fi
-    
+
     if [ -z "$result" ]; then
         echo "No tasks found matching '$query'"
         return 0
     fi
-    
+
     echo "Tasks matching '$query':"
     echo "======================="
     echo "$result" | while IFS='|' read -r id note; do
@@ -1972,42 +2029,61 @@ search_tasks() {
 search_threads() {
     local query="$1"
     local limit="$2"
-    
-    # Sanitize query for FTS5 and escape for SQL
-    local query_escaped=$(sanitize_fts_query "$query")
-    
+
+    # Sanitize query for FTS5
+    local query_sanitized=$(sanitize_fts_query "$query")
+
+    if [ -z "$query_sanitized" ]; then
+        echo "Error: Query must contain searchable text"
+        return 1
+    fi
+
     # Check if bm25 is available, fall back to simple ordering if not
-    local bm25_test=$(sqlite3 "$DB_PATH" "SELECT bm25(fts_threads) FROM fts_threads LIMIT 1;" 2>/dev/null)
+    local bm25_test=$(sqlite_exec "SELECT bm25(fts_threads) FROM fts_threads LIMIT 1;" 2>/dev/null)
     local bm25_available=0
     if [ $? -eq 0 ] && [ -n "$bm25_test" ]; then
         bm25_available=1
     fi
-    
+
     local result
     if [ "$bm25_available" -eq 1 ]; then
-        result=$(sqlite3 "$DB_PATH" "
-            SELECT th.thread_id, th.summary, th.resolved
-            FROM amp_threads th
-            JOIN (SELECT rowid, bm25(fts_threads) as score FROM fts_threads WHERE fts_threads MATCH '$query_escaped') fts ON th.rowid = fts.rowid
-            ORDER BY fts.score ASC, th.resolved ASC, th.thread_id DESC
-            LIMIT $limit;
-        ")
+        result=$(
+            sqlite_exec <<EOF
+.parameter init
+.parameter set @query '$query_sanitized'
+SELECT th.thread_id, th.summary, th.resolved
+FROM amp_threads th
+JOIN (
+    SELECT rowid, bm25(fts_threads) AS score
+    FROM fts_threads
+    WHERE fts_threads MATCH @query
+) fts ON th.rowid = fts.rowid
+ORDER BY fts.score ASC, th.resolved ASC, th.thread_id DESC
+LIMIT $limit;
+EOF
+        )
     else
         echo "Warning: bm25() unavailable; using simple ordering"
-        result=$(sqlite3 "$DB_PATH" "
-            SELECT th.thread_id, th.summary, th.resolved
-            FROM amp_threads th
-            WHERE th.rowid IN (SELECT rowid FROM fts_threads WHERE fts_threads MATCH '$query_escaped')
-            ORDER BY th.resolved ASC, th.thread_id DESC
-            LIMIT $limit;
-        ")
+        result=$(
+            sqlite_exec <<EOF
+.parameter init
+.parameter set @query '$query_sanitized'
+SELECT th.thread_id, th.summary, th.resolved
+FROM amp_threads th
+WHERE th.rowid IN (
+    SELECT rowid FROM fts_threads WHERE fts_threads MATCH @query
+)
+ORDER BY th.resolved ASC, th.thread_id DESC
+LIMIT $limit;
+EOF
+        )
     fi
-    
+
     if [ -z "$result" ]; then
         echo "No threads found matching '$query'"
         return 0
     fi
-    
+
     echo "Threads matching '$query':"
     echo "=========================="
     echo "$result" | while IFS='|' read -r thread_id summary resolved; do
@@ -2022,44 +2098,71 @@ search_threads() {
 search_artifacts() {
     local query="$1"
     local limit="$2"
-    
-    # Sanitize query for FTS5 and escape for SQL
-    local query_escaped=$(sanitize_fts_query "$query")
-    
+
+    # Sanitize query for FTS5
+    local query_sanitized=$(sanitize_fts_query "$query")
+
+    if [ -z "$query_sanitized" ]; then
+        echo "Error: Query must contain searchable text"
+        return 1
+    fi
+
     # Check if bm25 is available, fall back to simple ordering if not
-    local bm25_test=$(sqlite3 "$DB_PATH" "SELECT bm25(fts_artifacts) FROM fts_artifacts LIMIT 1;" 2>/dev/null)
+    local bm25_test=$(sqlite_exec "SELECT bm25(fts_artifacts) FROM fts_artifacts LIMIT 1;" 2>/dev/null)
     local bm25_available=0
     if [ $? -eq 0 ] && [ -n "$bm25_test" ]; then
         bm25_available=1
     fi
-    
+
     local result
     if [ "$bm25_available" -eq 1 ]; then
-        result=$(sqlite3 "$DB_PATH" "
-            SELECT a.id, a.filename, COALESCE(a.summary, '') AS summary,
-                   (SELECT snippet(fts_artifacts, -1, '[', ']', ' … ', 12) FROM fts_artifacts WHERE rowid = a.id AND fts_artifacts MATCH '$query_escaped') AS snippet
-            FROM artifacts a
-            JOIN (SELECT rowid, bm25(fts_artifacts) as score FROM fts_artifacts WHERE fts_artifacts MATCH '$query_escaped') fts ON a.id = fts.rowid
-            ORDER BY fts.score ASC, a.created_at DESC, a.id DESC
-            LIMIT $limit;
-        ")
+        result=$(
+            sqlite_exec <<EOF
+.parameter init
+.parameter set @query '$query_sanitized'
+SELECT a.id, a.filename, COALESCE(a.summary, '') AS summary,
+       (
+           SELECT snippet(fts_artifacts, -1, '[', ']', ' … ', 12)
+           FROM fts_artifacts
+           WHERE rowid = a.id AND fts_artifacts MATCH @query
+       ) AS snippet
+FROM artifacts a
+JOIN (
+    SELECT rowid, bm25(fts_artifacts) AS score
+    FROM fts_artifacts
+    WHERE fts_artifacts MATCH @query
+) fts ON a.id = fts.rowid
+ORDER BY fts.score ASC, a.created_at DESC, a.id DESC
+LIMIT $limit;
+EOF
+        )
     else
         echo "Warning: bm25() unavailable; using simple ordering"
-        result=$(sqlite3 "$DB_PATH" "
-            SELECT a.id, a.filename, COALESCE(a.summary, '') AS summary,
-                   (SELECT snippet(fts_artifacts, -1, '[', ']', ' … ', 12) FROM fts_artifacts WHERE rowid = a.id AND fts_artifacts MATCH '$query_escaped') AS snippet
-            FROM artifacts a
-            WHERE a.id IN (SELECT rowid FROM fts_artifacts WHERE fts_artifacts MATCH '$query_escaped')
-            ORDER BY a.created_at DESC, a.id DESC
-            LIMIT $limit;
-        ")
+        result=$(
+            sqlite_exec <<EOF
+.parameter init
+.parameter set @query '$query_sanitized'
+SELECT a.id, a.filename, COALESCE(a.summary, '') AS summary,
+       (
+           SELECT snippet(fts_artifacts, -1, '[', ']', ' … ', 12)
+           FROM fts_artifacts
+           WHERE rowid = a.id AND fts_artifacts MATCH @query
+       ) AS snippet
+FROM artifacts a
+WHERE a.id IN (
+    SELECT rowid FROM fts_artifacts WHERE fts_artifacts MATCH @query
+)
+ORDER BY a.created_at DESC, a.id DESC
+LIMIT $limit;
+EOF
+        )
     fi
-    
+
     if [ -z "$result" ]; then
         echo "No artifacts found matching '$query'"
         return 0
     fi
-    
+
     echo "Artifacts matching '$query':"
     echo "============================"
     echo "$result" | while IFS='|' read -r id filename summary snippet; do
@@ -2074,44 +2177,71 @@ search_artifacts() {
 search_prompts() {
     local query="$1"
     local limit="$2"
-    
-    # Sanitize query for FTS5 and escape for SQL
-    local query_escaped=$(sanitize_fts_query "$query")
-    
+
+    # Sanitize query for FTS5
+    local query_sanitized=$(sanitize_fts_query "$query")
+
+    if [ -z "$query_sanitized" ]; then
+        echo "Error: Query must contain searchable text"
+        return 1
+    fi
+
     # Check if bm25 is available, fall back to simple ordering if not
-    local bm25_test=$(sqlite3 "$DB_PATH" "SELECT bm25(fts_prompts) FROM fts_prompts LIMIT 1;" 2>/dev/null)
+    local bm25_test=$(sqlite_exec "SELECT bm25(fts_prompts) FROM fts_prompts LIMIT 1;" 2>/dev/null)
     local bm25_available=0
     if [ $? -eq 0 ] && [ -n "$bm25_test" ]; then
         bm25_available=1
     fi
-    
+
     local result
     if [ "$bm25_available" -eq 1 ]; then
-        result=$(sqlite3 "$DB_PATH" "
-            SELECT p.id, p.name, COALESCE(p.description, '') AS description,
-                   (SELECT snippet(fts_prompts, -1, '[', ']', ' … ', 12) FROM fts_prompts WHERE rowid = p.id AND fts_prompts MATCH '$query_escaped') AS snippet
-            FROM prompts p
-            JOIN (SELECT rowid, bm25(fts_prompts) as score FROM fts_prompts WHERE fts_prompts MATCH '$query_escaped') fts ON p.id = fts.rowid
-            ORDER BY fts.score ASC, p.created_at DESC, p.id DESC
-            LIMIT $limit;
-        ")
+        result=$(
+            sqlite_exec <<EOF
+.parameter init
+.parameter set @query '$query_sanitized'
+SELECT p.id, p.name, COALESCE(p.description, '') AS description,
+       (
+           SELECT snippet(fts_prompts, -1, '[', ']', ' … ', 12)
+           FROM fts_prompts
+           WHERE rowid = p.id AND fts_prompts MATCH @query
+       ) AS snippet
+FROM prompts p
+JOIN (
+    SELECT rowid, bm25(fts_prompts) AS score
+    FROM fts_prompts
+    WHERE fts_prompts MATCH @query
+) fts ON p.id = fts.rowid
+ORDER BY fts.score ASC, p.created_at DESC, p.id DESC
+LIMIT $limit;
+EOF
+        )
     else
         echo "Warning: bm25() unavailable; using simple ordering"
-        result=$(sqlite3 "$DB_PATH" "
-            SELECT p.id, p.name, COALESCE(p.description, '') AS description,
-                   (SELECT snippet(fts_prompts, -1, '[', ']', ' … ', 12) FROM fts_prompts WHERE rowid = p.id AND fts_prompts MATCH '$query_escaped') AS snippet
-            FROM prompts p
-            WHERE p.id IN (SELECT rowid FROM fts_prompts WHERE fts_prompts MATCH '$query_escaped')
-            ORDER BY p.created_at DESC, p.id DESC
-            LIMIT $limit;
-        ")
+        result=$(
+            sqlite_exec <<EOF
+.parameter init
+.parameter set @query '$query_sanitized'
+SELECT p.id, p.name, COALESCE(p.description, '') AS description,
+       (
+           SELECT snippet(fts_prompts, -1, '[', ']', ' … ', 12)
+           FROM fts_prompts
+           WHERE rowid = p.id AND fts_prompts MATCH @query
+       ) AS snippet
+FROM prompts p
+WHERE p.id IN (
+    SELECT rowid FROM fts_prompts WHERE fts_prompts MATCH @query
+)
+ORDER BY p.created_at DESC, p.id DESC
+LIMIT $limit;
+EOF
+        )
     fi
-    
+
     if [ -z "$result" ]; then
         echo "No prompts found matching '$query'"
         return 0
     fi
-    
+
     echo "Prompts matching '$query':"
     echo "========================="
     echo "$result" | while IFS='|' read -r id name description snippet; do
@@ -2130,42 +2260,61 @@ search_prompts() {
 search_tags() {
     local query="$1"
     local limit="$2"
-    
-    # Sanitize query for FTS5 and escape for SQL
-    local query_escaped=$(sanitize_fts_query "$query")
-    
+
+    # Sanitize query for FTS5
+    local query_sanitized=$(sanitize_fts_query "$query")
+
+    if [ -z "$query_sanitized" ]; then
+        echo "Error: Query must contain searchable text"
+        return 1
+    fi
+
     # Check if bm25 is available, fall back to simple ordering if not
-    local bm25_test=$(sqlite3 "$DB_PATH" "SELECT bm25(fts_tags) FROM fts_tags LIMIT 1;" 2>/dev/null)
+    local bm25_test=$(sqlite_exec "SELECT bm25(fts_tags) FROM fts_tags LIMIT 1;" 2>/dev/null)
     local bm25_available=0
     if [ $? -eq 0 ] && [ -n "$bm25_test" ]; then
         bm25_available=1
     fi
-    
+
     local result
     if [ "$bm25_available" -eq 1 ]; then
-        result=$(sqlite3 "$DB_PATH" "
-            SELECT g.id, g.label
-            FROM tags g
-            JOIN (SELECT rowid, bm25(fts_tags) as score FROM fts_tags WHERE fts_tags MATCH '$query_escaped') fts ON g.id = fts.rowid
-            ORDER BY fts.score ASC, g.label COLLATE NOCASE ASC
-            LIMIT $limit;
-        ")
+        result=$(
+            sqlite_exec <<EOF
+.parameter init
+.parameter set @query '$query_sanitized'
+SELECT g.id, g.label
+FROM tags g
+JOIN (
+    SELECT rowid, bm25(fts_tags) AS score
+    FROM fts_tags
+    WHERE fts_tags MATCH @query
+) fts ON g.id = fts.rowid
+ORDER BY fts.score ASC, g.label COLLATE NOCASE ASC
+LIMIT $limit;
+EOF
+        )
     else
         echo "Warning: bm25() unavailable; using simple ordering"
-        result=$(sqlite3 "$DB_PATH" "
-            SELECT g.id, g.label
-            FROM tags g
-            WHERE g.id IN (SELECT rowid FROM fts_tags WHERE fts_tags MATCH '$query_escaped')
-            ORDER BY g.label COLLATE NOCASE ASC
-            LIMIT $limit;
-        ")
+        result=$(
+            sqlite_exec <<EOF
+.parameter init
+.parameter set @query '$query_sanitized'
+SELECT g.id, g.label
+FROM tags g
+WHERE g.id IN (
+    SELECT rowid FROM fts_tags WHERE fts_tags MATCH @query
+)
+ORDER BY g.label COLLATE NOCASE ASC
+LIMIT $limit;
+EOF
+        )
     fi
-    
+
     if [ -z "$result" ]; then
         echo "No tags found matching '$query'"
         return 0
     fi
-    
+
     echo "Tags matching '$query':"
     echo "======================"
     echo "$result" | while IFS='|' read -r id label; do
