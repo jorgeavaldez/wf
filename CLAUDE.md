@@ -13,6 +13,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **Database Operations:**
 - `export WF_DB_PATH="/path/to/your/database.db"` - Set database path (required)
 - `./wf init ~/my-wf.db` - Create new database at specified path
+- `./wf migrate search` - Enable full-text search on existing databases (one-time, schema v1 → v2)
+- `./wf migrate timestamps` - Add timestamps to threads and tasks (one-time, schema v2 → v3)
 - `./wf tool overview` - Show complete usage guide for LLM agents
 
 **CRITICAL: Testing with Isolated Database:**
@@ -43,9 +45,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Content Management**: File content stored as escaped text in SQLite with summarization support
 
 **Database Design:**
-- Core tables: `tasks`, `amp_threads`, `artifacts`, `prompts`, `tags`  
+- Core tables: `tasks`, `amp_threads`, `artifacts`, `prompts`, `tags`
+- Timestamp columns: `created_at`, `updated_at` on `tasks` and `amp_threads` (schema v3+)
 - Junction tables: `task_tags`, `thread_tags`, `artifact_tags`, `prompt_tags`, plus cross-linking tables
 - Foreign key constraints with CASCADE deletes for data integrity
+- No UPDATE triggers for timestamps (conflicts with FTS triggers - known SQLite limitation)
 
 **CLI Design Philosophy:**
 - Minimal dependencies (bash, sqlite3, shfmt, shellcheck)
@@ -122,8 +126,30 @@ sqlite3 "$DB_PATH" "INSERT INTO tasks (note) VALUES ('$TASK_NOTE_ESCAPED');"
 - FTS5 virtual tables: `fts_tasks`, `fts_threads`, `fts_artifacts`, `fts_prompts`, `fts_tags`
 - Automatic triggers keep FTS tables synchronized with base tables
 - Migration tracking via `wf_meta` table with schema versioning
-- New databases (schema v2) include FTS from initialization
-- Existing databases require `./wf migrate search` to enable search
+- New databases (schema v3) include FTS and timestamps from initialization
+- Existing databases require migrations to enable features:
+  - `./wf migrate search` for full-text search (schema v1 → v2)
+  - `./wf migrate timestamps` for timestamp tracking (schema v2 → v3)
+
+## Timestamps and Sorting
+
+**Timestamp Tracking (Schema v3+):**
+- `created_at` and `updated_at` columns on `tasks` and `amp_threads` tables
+- Both timestamps automatically set on creation (set explicitly in INSERT statements)
+- `updated_at` is NOT automatically maintained on updates (due to FTS trigger conflicts)
+- `updated_at` remains at creation time unless explicitly updated in application code
+- Existing databases can add timestamps via `./wf migrate timestamps`
+
+**Default Sorting Behavior:**
+- Tasks: Sorted by `created_at DESC, id DESC` (newest first)
+- Threads: Sorted by `created_at DESC, thread_id DESC` (newest first)
+- Search results: Relevance score prioritized, then timestamp, then id/thread_id
+- List commands show most recent items by default (limit 5, use `--all` or `--count N` to override)
+
+**Display Behavior:**
+- `./wf show thread <id>` displays Created and Updated timestamps
+- `./wf dump task <id>` displays Created and Updated timestamps
+- List commands sorted by creation time but don't display timestamps (for brevity)
 
 ## Important Notes
 
@@ -132,3 +158,4 @@ sqlite3 "$DB_PATH" "INSERT INTO tasks (note) VALUES ('$TASK_NOTE_ESCAPED');"
 - Database must be initialized before use with `./wf init <path>`
 - All content is stored as text with proper SQL escaping for single quotes
 - Search functionality requires SQLite with FTS5 support (available in most modern distributions)
+- Timestamp functionality requires running `./wf migrate timestamps` on existing databases

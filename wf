@@ -33,6 +33,7 @@ show_help() {
     echo "  $0 tag <type> <id> [tag1,tag2,tag3...]"
     echo "  $0 search <entity> <query> [--limit N]"
     echo "  $0 migrate search"
+    echo "  $0 migrate timestamps"
     echo "  $0 tool overview"
     echo "  $0 init <db_path>"
     echo ""
@@ -73,8 +74,80 @@ show_help() {
     echo "  $0 search threads \"authentication\""
     echo "  $0 search tags \"urgent\""
     echo "  $0 migrate search"
+    echo "  $0 migrate timestamps"
     echo "  $0 tool overview"
     echo "  $0 init ~/my-wf.db"
+}
+
+migrate_timestamps() {
+    echo "Running timestamp migration..."
+
+    # Ensure meta table exists
+    sqlite_exec "CREATE TABLE IF NOT EXISTS wf_meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );"
+
+    # Check if migration already applied
+    MIGRATION_APPLIED=$(sqlite_exec "SELECT value FROM wf_meta WHERE key='migration:timestamps_v1';" 2>/dev/null || echo "")
+    if [ "$MIGRATION_APPLIED" = "applied" ]; then
+        echo "Timestamp migration already applied."
+        exit 0
+    fi
+
+    echo "Adding timestamp columns to amp_threads and tasks tables..."
+
+    # Add timestamp columns and triggers
+    # Note: SQLite ALTER TABLE ADD COLUMN doesn't support DEFAULT with functions like CURRENT_TIMESTAMP
+    # We add columns without default, then set values and add triggers
+    # Each ALTER TABLE must be separate because SQLite doesn't roll back DDL in transactions
+
+    # Try to add columns to amp_threads (ignore errors if columns already exist)
+    sqlite_exec "ALTER TABLE amp_threads ADD COLUMN created_at DATETIME;" 2>/dev/null || true
+    sqlite_exec "ALTER TABLE amp_threads ADD COLUMN updated_at DATETIME;" 2>/dev/null || true
+
+    # Try to add columns to tasks (ignore errors if columns already exist)
+    sqlite_exec "ALTER TABLE tasks ADD COLUMN created_at DATETIME;" 2>/dev/null || true
+    sqlite_exec "ALTER TABLE tasks ADD COLUMN updated_at DATETIME;" 2>/dev/null || true
+
+    # Temporarily drop FTS UPDATE triggers to avoid "unsafe use of virtual table" error during UPDATE
+    # Save trigger definitions first
+    TASKS_AU_TRIGGER=$(sqlite_exec "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='tasks_au';")
+    THREADS_AU_TRIGGER=$(sqlite_exec "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='amp_threads_au';")
+
+    # Drop FTS UPDATE triggers temporarily
+    sqlite_exec "DROP TRIGGER IF EXISTS tasks_au;"
+    sqlite_exec "DROP TRIGGER IF EXISTS amp_threads_au;"
+
+    # Set all rows to current timestamp (only where NULL)
+    sqlite_exec "UPDATE amp_threads SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL;"
+    sqlite_exec "UPDATE amp_threads SET updated_at = CURRENT_TIMESTAMP WHERE updated_at IS NULL;"
+    sqlite_exec "UPDATE tasks SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL;"
+    sqlite_exec "UPDATE tasks SET updated_at = CURRENT_TIMESTAMP WHERE updated_at IS NULL;"
+
+    # Recreate FTS UPDATE triggers if they existed
+    if [ -n "$TASKS_AU_TRIGGER" ]; then
+        sqlite_exec "$TASKS_AU_TRIGGER;"
+    fi
+    if [ -n "$THREADS_AU_TRIGGER" ]; then
+        sqlite_exec "$THREADS_AU_TRIGGER;"
+    fi
+
+    # Note: We do NOT create UPDATE triggers for timestamps because they conflict with FTS triggers
+    # SQLite doesn't allow recursive UPDATEs when FTS virtual tables are involved
+    # The updated_at column will remain at its initial value unless explicitly updated by application code
+    # This is an acceptable tradeoff to maintain FTS functionality
+
+    # Record migration applied and update schema version
+    sqlite_exec "
+        INSERT INTO wf_meta(key,value) VALUES('migration:timestamps_v1','applied')
+        ON CONFLICT(key) DO UPDATE SET value='applied', updated_at=CURRENT_TIMESTAMP;
+        INSERT INTO wf_meta(key,value) VALUES('schema_version','3')
+        ON CONFLICT(key) DO UPDATE SET value='3', updated_at=CURRENT_TIMESTAMP;
+    "
+
+    echo "Timestamp migration completed successfully!"
 }
 
 migrate_search() {
@@ -280,14 +353,18 @@ init_database() {
     sqlite3 -cmd "PRAGMA trusted_schema=ON;" "$NEW_DB_PATH" <<'EOF'
 -- Core tables
 CREATE TABLE amp_threads (
-    thread_id TEXT PRIMARY KEY NOT NULL, 
-    summary TEXT, 
-    resolved BOOLEAN DEFAULT FALSE
+    thread_id TEXT PRIMARY KEY NOT NULL,
+    summary TEXT,
+    resolved BOOLEAN DEFAULT FALSE,
+    created_at DATETIME,
+    updated_at DATETIME
 );
 
 CREATE TABLE tasks (
-    id INTEGER PRIMARY KEY, 
-    note TEXT NOT NULL
+    id INTEGER PRIMARY KEY,
+    note TEXT NOT NULL,
+    created_at DATETIME,
+    updated_at DATETIME
 );
 
 CREATE TABLE tags (
@@ -482,9 +559,14 @@ CREATE TRIGGER IF NOT EXISTS tags_au AFTER UPDATE ON tags BEGIN
   INSERT INTO fts_tags(rowid, label) VALUES (new.id, new.label);
 END;
 
+-- Note: No UPDATE triggers for timestamps due to conflicts with FTS triggers
+-- SQLite doesn't allow recursive UPDATEs when FTS virtual tables are involved
+-- Timestamps are set explicitly in INSERT statements (created_at, updated_at)
+-- The updated_at column will remain at its initial value unless explicitly updated
+
 -- Set baseline schema version for new databases
-INSERT INTO wf_meta(key,value) VALUES('schema_version','2')
-ON CONFLICT(key) DO UPDATE SET value='2', updated_at=CURRENT_TIMESTAMP;
+INSERT INTO wf_meta(key,value) VALUES('schema_version','3')
+ON CONFLICT(key) DO UPDATE SET value='3', updated_at=CURRENT_TIMESTAMP;
 EOF
 
     if [ $? -eq 0 ]; then
@@ -514,8 +596,8 @@ add_task() {
     # Escape single quotes for SQL
     TASK_NOTE_ESCAPED=$(echo "$TASK_NOTE" | sed "s/'/''/g")
 
-    # Insert the task and get its ID
-    TASK_ID=$(sqlite_exec "INSERT INTO tasks (note) VALUES ('$TASK_NOTE_ESCAPED'); SELECT last_insert_rowid();")
+    # Insert the task with timestamps and get its ID
+    TASK_ID=$(sqlite_exec "INSERT INTO tasks (note, created_at, updated_at) VALUES ('$TASK_NOTE_ESCAPED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP); SELECT last_insert_rowid();")
 
     echo "Added task #$TASK_ID: $TASK_NOTE"
 
@@ -583,8 +665,8 @@ add_thread() {
     THREAD_ID_ESCAPED=$(echo "$THREAD_ID" | sed "s/'/''/g")
     SUMMARY_ESCAPED=$(echo "$SUMMARY" | sed "s/'/''/g")
 
-    # Insert the thread
-    sqlite_exec "INSERT OR REPLACE INTO amp_threads (thread_id, summary, resolved) VALUES ('$THREAD_ID_ESCAPED', '$SUMMARY_ESCAPED', $RESOLVED);"
+    # Insert the thread with timestamps
+    sqlite_exec "INSERT OR REPLACE INTO amp_threads (thread_id, summary, resolved, created_at, updated_at) VALUES ('$THREAD_ID_ESCAPED', '$SUMMARY_ESCAPED', $RESOLVED, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);"
 
     echo "Added thread $THREAD_ID: $SUMMARY (resolved: $RESOLVED)"
 
@@ -622,12 +704,12 @@ dump_task() {
 
     # Get task with tags
     RESULT=$(sqlite_exec "
-        SELECT t.id, t.note, GROUP_CONCAT(g.label) as tags
+        SELECT t.id, t.note, GROUP_CONCAT(g.label) as tags, t.created_at, t.updated_at
         FROM tasks t
         LEFT JOIN task_tags tt ON t.id = tt.task_id
         LEFT JOIN tags g ON tt.tag_id = g.id
         WHERE t.id = $TASK_ID
-        GROUP BY t.id, t.note;
+        GROUP BY t.id, t.note, t.created_at, t.updated_at;
     ")
 
     if [ -z "$RESULT" ]; then
@@ -635,13 +717,19 @@ dump_task() {
         exit 1
     fi
 
-    echo "$RESULT" | while IFS='|' read -r id note tags; do
+    echo "$RESULT" | while IFS='|' read -r id note tags created_at updated_at; do
         echo "Task #$id"
         echo "Note: $note"
         if [ -n "$tags" ]; then
             echo "Tags: $tags"
         else
             echo "Tags: none"
+        fi
+        if [ -n "$created_at" ]; then
+            echo "Created: $created_at"
+        fi
+        if [ -n "$updated_at" ]; then
+            echo "Updated: $updated_at"
         fi
     done
 }
@@ -711,7 +799,7 @@ list_tasks() {
             LEFT JOIN tags g ON tt.tag_id = g.id
             WHERE $TAG_CONDITIONS
             GROUP BY t.id, t.note
-            ORDER BY t.id DESC
+            ORDER BY t.created_at DESC, t.id DESC
             $LIMIT_CLAUSE;
         ")
 
@@ -730,7 +818,7 @@ list_tasks() {
             LEFT JOIN task_tags tt ON t.id = tt.task_id
             LEFT JOIN tags g ON tt.tag_id = g.id
             GROUP BY t.id, t.note
-            ORDER BY t.id DESC
+            ORDER BY t.created_at DESC, t.id DESC
             $LIMIT_CLAUSE;
         ")
 
@@ -768,12 +856,12 @@ show_thread() {
 
     # Get thread with tags
     RESULT=$(sqlite_exec "
-        SELECT t.thread_id, t.summary, t.resolved, GROUP_CONCAT(g.label) as tags
+        SELECT t.thread_id, t.summary, t.resolved, GROUP_CONCAT(g.label) as tags, t.created_at, t.updated_at
         FROM amp_threads t
         LEFT JOIN thread_tags tt ON t.thread_id = tt.thread_id
         LEFT JOIN tags g ON tt.tag_id = g.id
         WHERE t.thread_id = '$THREAD_ID_ESCAPED'
-        GROUP BY t.thread_id, t.summary, t.resolved;
+        GROUP BY t.thread_id, t.summary, t.resolved, t.created_at, t.updated_at;
     ")
 
     if [ -z "$RESULT" ]; then
@@ -781,7 +869,7 @@ show_thread() {
         exit 1
     fi
 
-    echo "$RESULT" | while IFS='|' read -r thread_id summary resolved tags; do
+    echo "$RESULT" | while IFS='|' read -r thread_id summary resolved tags created_at updated_at; do
         echo "Thread: $thread_id"
         echo "Summary: $summary"
         echo "Resolved: $resolved"
@@ -789,6 +877,12 @@ show_thread() {
             echo "Tags: $tags"
         else
             echo "Tags: none"
+        fi
+        if [ -n "$created_at" ]; then
+            echo "Created: $created_at"
+        fi
+        if [ -n "$updated_at" ]; then
+            echo "Updated: $updated_at"
         fi
     done
 }
@@ -858,7 +952,7 @@ list_threads() {
             LEFT JOIN tags g ON tt.tag_id = g.id
             WHERE $TAG_CONDITIONS
             GROUP BY t.thread_id, t.summary, t.resolved
-            ORDER BY t.thread_id DESC
+            ORDER BY t.created_at DESC, t.thread_id DESC
             $LIMIT_CLAUSE;
         ")
 
@@ -877,7 +971,7 @@ list_threads() {
             LEFT JOIN thread_tags tt ON t.thread_id = tt.thread_id
             LEFT JOIN tags g ON tt.tag_id = g.id
             GROUP BY t.thread_id, t.summary, t.resolved
-            ORDER BY t.thread_id DESC
+            ORDER BY t.created_at DESC, t.thread_id DESC
             $LIMIT_CLAUSE;
         ")
 
@@ -1993,7 +2087,7 @@ JOIN (
     FROM fts_tasks
     WHERE fts_tasks MATCH @query
 ) fts ON t.id = fts.rowid
-ORDER BY fts.score ASC, t.id DESC
+ORDER BY fts.score ASC, t.created_at DESC, t.id DESC
 LIMIT $limit;
 EOF
         )
@@ -2008,7 +2102,7 @@ FROM tasks t
 WHERE t.id IN (
     SELECT rowid FROM fts_tasks WHERE fts_tasks MATCH @query
 )
-ORDER BY t.id DESC
+ORDER BY t.created_at DESC, t.id DESC
 LIMIT $limit;
 EOF
         )
@@ -2058,7 +2152,7 @@ JOIN (
     FROM fts_threads
     WHERE fts_threads MATCH @query
 ) fts ON th.rowid = fts.rowid
-ORDER BY fts.score ASC, th.resolved ASC, th.thread_id DESC
+ORDER BY fts.score ASC, th.resolved ASC, th.created_at DESC, th.thread_id DESC
 LIMIT $limit;
 EOF
         )
@@ -2073,7 +2167,7 @@ FROM amp_threads th
 WHERE th.rowid IN (
     SELECT rowid FROM fts_threads WHERE fts_threads MATCH @query
 )
-ORDER BY th.resolved ASC, th.thread_id DESC
+ORDER BY th.resolved ASC, th.created_at DESC, th.thread_id DESC
 LIMIT $limit;
 EOF
         )
@@ -2390,6 +2484,12 @@ Full-Text Search (requires migration):
 - wf search tags "urgent" --limit 20
 - Uses BM25 ranking for relevance; searches across all text fields per entity
 
+Timestamps and Sorting:
+- wf migrate timestamps (adds created_at/updated_at to threads and tasks)
+- Tasks and threads sorted by creation time (newest first) by default
+- All list commands show most recent items first
+- Timestamps automatically tracked on all new tasks and threads
+
 Project Organization:
 - Use project tags: project-a,project-b
 - Filter everything: wf list tasks project-a, wf list prompts project-a
@@ -2410,6 +2510,7 @@ BEST PRACTICES:
 - Use stdin for quick content: pbpaste | wf add artifact - "clipboard" temp
 - From editors: :'<,'>w !wf add artifact - "buffer-content" coding
 - Enable search: wf migrate search (one-time setup for existing databases)
+- Enable timestamps: wf migrate timestamps (one-time setup for existing databases)
 - Use search to find content: wf search artifacts "authentication flow"
 - Search is especially useful for large prompt libraries and extensive artifacts
 
@@ -2467,6 +2568,10 @@ if [ $# -ge 2 ]; then
             ;;
         "migrate search")
             COMMAND="migrate-search"
+            shift
+            ;;
+        "migrate timestamps")
+            COMMAND="migrate-timestamps"
             shift
             ;;
     esac
@@ -2576,6 +2681,9 @@ case "$COMMAND" in
         ;;
     "migrate-search")
         migrate_search
+        ;;
+    "migrate-timestamps")
+        migrate_timestamps
         ;;
     "search")
         shift
